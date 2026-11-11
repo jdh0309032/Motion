@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Neon Launch</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<style>
+  :root{--bg:#07070f;--a:#ff3d7f;--b:#4cc9f0;--fg:#fff}
+  *{box-sizing:border-box;margin:0}
+  html,body{width:1920px;height:1080px;background:radial-gradient(circle at 50% 40%,#1b1240,var(--bg) 70%);overflow:hidden;font-family:Inter,system-ui,sans-serif}
+  .center{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);text-align:center}
+  .title{font-size:150px;font-weight:900;color:var(--fg);letter-spacing:-4px}
+  .title span{display:inline-block}
+  .sub{margin-top:24px;font-size:34px;letter-spacing:14px;color:var(--b);opacity:0;animation:fadeUp 1s cubic-bezier(.2,.8,.2,1) 1.6s forwards}
+  .ring{position:absolute;left:50%;top:46%;width:760px;height:760px;margin:-380px 0 0 -380px;border-radius:50%;
+        border:3px solid var(--a);box-shadow:0 0 60px var(--a);animation:spin 8s linear infinite, pulse 2s ease-in-out infinite alternate}
+  .bar{position:absolute;left:0;bottom:120px;height:8px;width:100%;background:linear-gradient(90deg,var(--a),var(--b));transform-origin:0 50%;transform:scaleX(0);animation:grow 2.4s ease-out .4s forwards}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:none}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pulse{from{opacity:.35}to{opacity:1}}
+  @keyframes grow{to{transform:scaleX(1)}}
+</style>
+</head>
+<body>
+  <div class="ring"></div>
+  <div class="center">
+    <h1 class="title"><span>N</span><span>E</span><span>O</span><span>N</span></h1>
+    <p class="sub">LAUNCH 2026</p>
+  </div>
+  <div class="bar"></div>
+<script>
+  gsap.from('.title span', { y: 160, opacity: 0, rotation: -20, duration: 0.9, ease: 'back.out(1.7)', stagger: 0.12, delay: 0.3 });
+  gsap.to('.title', { scale: 1.06, duration: 1.5, ease: 'sine.inOut', yoyo: true, repeat: -1, delay: 2 });
+</script>
+</body>
+</html>
