@@ -93,6 +93,7 @@ export function duplicateLayers() {
   if (out.length) S().select({ layers: out });
 }
 export function moveLayer(id, dir) {
+  if (S().project.layers.find((l) => l.id === id)?.selector) S().toast('HTML 요소 레이어의 쌓임 순서는 원본 문서 순서를 따릅니다 (새로 만든 레이어만 이동)');
   S().mutate((d) => { const i = d.layers.findIndex((l) => l.id === id), j = i + dir; if (i < 0 || j < 0 || j >= d.layers.length) return; [d.layers[i], d.layers[j]] = [d.layers[j], d.layers[i]]; }, { structure: true });
 }
 

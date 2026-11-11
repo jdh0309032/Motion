@@ -1,21 +1,7 @@
-# Motion Editor
+# Motion
 
-Claude Code로 만든 HTML 모션그래픽(CSS 애니메이션 · Web Animations · GSAP)을 브라우저에서 바로 수정하는 단일 파일 툴입니다.
+Claude Code로 만든 HTML 모션그래픽을 수정하는 도구 모음.
 
-## 실행
-```bash
-python3 -m http.server 8000
-```
-→ http://localhost:8000 접속 (index.html 파일을 직접 열어도 되지만, [데모] 버튼은 서버가 필요합니다)
-
-## 기능
-- **열기**: HTML 파일 드래그 앤 드롭 / 열기 버튼 / 코드 붙여넣기(Ctrl+V)
-- **타임라인**: 재생·일시정지(Space), 스크럽, 속도 조절 — CSS/WAAPI 애니메이션과 GSAP 글로벌 타임라인 지원
-- **색상·변수**: `:root` CSS 변수를 컬러피커로 수정, 하드코딩된 hex 색상 일괄 치환
-- **애니메이션**: 감지된 애니메이션별 길이·지연·이징·반복 수정
-- **요소**: 🎯로 미리보기에서 요소 클릭 → 텍스트, 색상, 크기, 폰트, transform 등 수정
-- **코드**: 원본 소스 직접 편집
-- **내보내기**: 원본 + 수정사항이 합쳐진 `*-edited.html` 다운로드. 수정 내역이 파일에 저장되므로 다시 열어 이어서 편집할 수 있습니다.
-- 미리보기 크기 프리셋 (1920×1080, 1080×1080, 1080×1920)
-
-예제: `examples/demo.html`
+- **[`studio/`](studio/README.md) — Motion Studio** (메인): After Effects 방식 에디터. CSS/GSAP 애니메이션을 레이어·키프레임으로 가져와
+  타임라인·그래프 에디터·이펙트로 수정하고, 프레임 정확 렌더러로 MP4/WebM/ProRes/GIF를 출력합니다.
+- `index.html` — 초기 버전의 단일 파일 간이 에디터 (CSS 변수·애니메이션 타이밍·텍스트 수정).

@@ -411,12 +411,14 @@
       // scale: uniform → 'scale', otherwise 'scaleX'/'scaleY'
       const st0 = decompose(r.S, r.c);
       const sxk = tracks.sx || [], syk = tracks.sy || [];
-      const uniform = Math.abs(st0.sx - st0.sy) < 0.01 && sxk.length === syk.length && sxk.every((k, i) => Math.abs(k.v - syk[i].v) < 0.01 && Math.abs(k.t - syk[i].t) < 1e-4);
+      const uniform = Math.abs(st0.sx - st0.sy) < 0.1 && sxk.length === syk.length && sxk.every((k, i) => Math.abs(k.v - syk[i].v) < 0.1 && Math.abs(k.t - syk[i].t) < 1e-4);
       if (uniform) { if (sxk.length) tracks.scale = sxk; }
       else { if (sxk.length) tracks.scaleX = sxk; if (syk.length) tracks.scaleY = syk; }
       delete tracks.sx; delete tracks.sy;
       for (const [k, ks] of Object.entries(tracks)) {
-        if (ks.every((x) => (typeof x.v === 'number' ? Math.abs(x.v - ks[0].v) < 0.02 : x.v === ks[0].v))) delete tracks[k];
+        // drop tracks that never visibly change (scale < 0.1 %, others < 0.02 units)
+        const eps = /^scale/.test(k) ? 0.1 : 0.02;
+        if (ks.every((x) => (typeof x.v === 'number' ? Math.abs(x.v - ks[0].v) < eps : x.v === ks[0].v))) delete tracks[k];
         else { const lp = e.loops[k] || e.loops[[...TF, 'scale', 'scaleX', 'scaleY'].includes(k) ? 'tf' : k]; if (lp) loops[k] = lp; }
       }
       const base = { ...propsFromStatic(r, uniform), opacity: r4(+getComputedStyle(el).opacity * 100) };

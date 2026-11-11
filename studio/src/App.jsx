@@ -7,7 +7,7 @@ import Inspector, { CompFields } from './components/Inspector.jsx';
 import SidePanel from './components/SidePanel.jsx';
 import RenderDialog from './components/RenderDialog.jsx';
 import { Modal, Btn } from './components/ui.jsx';
-import { importFiles, saveProject, deleteSelection, duplicateLayers, copyKeys, pasteKeys, setEaseSelected, addLayer, importHtmlText } from './engine/actions.js';
+import { importFiles, saveProject, deleteSelection, duplicateLayers, copyKeys, pasteKeys, setEaseSelected, addLayer, importHtmlText, moveLayer } from './engine/actions.js';
 import { playAudio, stopAudio } from './engine/audio.js';
 import { EASE_PRESETS } from './engine/bezier.js';
 import { Loader2 } from 'lucide-react';
@@ -55,6 +55,7 @@ function useShortcuts(open) {
       hit(c && e.key.toLowerCase() === 'c', copyKeys) ||
       hit(c && e.key.toLowerCase() === 'v', pasteKeys) ||
       hit(c && e.key.toLowerCase() === 't', () => addLayer('text')) ||
+      hit(c && (e.key === ']' || e.key === '['), () => st.sel.layers.forEach((id) => moveLayer(id, e.key === ']' ? -1 : 1))) ||
       hit(c && e.altKey && e.key.toLowerCase() === 'h', () => setEaseSelected([0, 0, 1, 1], true)) ||
       hit(e.key === 'F9', () => setEaseSelected(e.shiftKey && c ? [0, 0, 0.67, 1] : e.shiftKey ? [0.33, 0, 1, 1] : EASE_PRESETS.easyEase)) ||
       hit(e.key === 'F3' && e.shiftKey, () => st.setUi({ graph: !st.ui.graph })) ||
