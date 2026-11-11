@@ -9,6 +9,12 @@
 (function (G) {
   if (G.MotionRuntime) return;
   const D = G.document;
+  // An embedded project means the composition drives the page: tell the page not to self-play
+  // (convention shared with renderers: ?render).
+  const AUTOPLAY = !!G.__MOTION_PROJECT__ && !/[?&]render\b/.test(G.location.search);
+  if (AUTOPLAY) {
+    try { G.history.replaceState(null, '', G.location.pathname + (G.location.search ? G.location.search + '&render' : '?render') + G.location.hash); } catch (e) {}
+  }
 
   // ───────────────────────────── 1. virtual clock ─────────────────────────────
   const real = {
@@ -95,10 +101,15 @@
   const M = (init) => new DOMMatrix(init);
   const T = (x, y, z = 0) => M().translate(x, y, z);
   function composeLocal(p, c) {
-    // T(pos) · Rz · Ry · Rx · S · T(-restCenter)
-    return M().translate(p.x, p.y, p.z || 0)
-      .rotateAxisAngle(0, 0, 1, p.rotation || 0).rotateAxisAngle(0, 1, 0, p.rotY || 0).rotateAxisAngle(1, 0, 0, p.rotX || 0)
-      .scale((p.scale / 100) * ((p.scaleX ?? 100) / 100), (p.scale / 100) * ((p.scaleY ?? 100) / 100), p.scale / 100).translate(-c.x, -c.y, 0);
+    // T(pos) · Rz · Ry · Rx · S · T(-restCenter) — 3D operations only when used, so 2D layers stay 2D
+    const s = p.scale / 100, sx = s * ((p.scaleX ?? 100) / 100), sy = s * ((p.scaleY ?? 100) / 100);
+    const is3D = !!(p.z || p.rotX || p.rotY);
+    let m = M().translate(p.x, p.y, p.z || 0);
+    if (p.rotation) m = m.rotate(p.rotation);
+    if (p.rotY) m = m.rotateAxisAngle(0, 1, 0, p.rotY);
+    if (p.rotX) m = m.rotateAxisAngle(1, 0, 0, p.rotX);
+    m = is3D ? m.scale(sx, sy, s) : m.scale(sx, sy);
+    return m.translate(-c.x, -c.y);
   }
   /** Decompose stage-space matrix X about rest center c into layer props. */
   function decompose(X, c) {
@@ -591,6 +602,7 @@
   function syncNodes() {
     const P = state.project, keep = new Set();
     P.layers.forEach((layer, i) => {
+      if (layer.type === 'audio' || layer.type === 'code') return;
       keep.add(layer.id);
       let n = state.nodes.get(layer.id);
       if (!n) {
@@ -627,7 +639,8 @@
     for (const a of state.kept || []) { try { a.currentTime = t * 1000; } catch (e) {} }
     const byId = new Map(P.layers.map((l) => [l.id, l]));
     const res = new Map(), world = new Map();
-    for (const l of P.layers) res.set(l.id, resolve(l, t));
+    const vis = P.layers.filter((l) => l.type !== 'audio' && l.type !== 'code');
+    for (const l of vis) res.set(l.id, resolve(l, t));
     const W = (id, guard = 0) => {
       if (world.has(id)) return world.get(id);
       const l = byId.get(id), n = state.nodes.get(id);
@@ -645,7 +658,13 @@
       world.set(id, m); return m;
     };
     const P3 = persp(P);
-    for (const l of P.layers) {
+    // script layers: drive the page's own renderer at layer-local time (time offset + stretch)
+    const sl = vis.find((l) => l.type === 'script' && l.visible !== false);
+    if (sl && typeof G.renderAt === 'function') {
+      const st = Math.max(0, (t - (sl.inPoint || 0)) * ((sl.content && sl.content.speed) || 100) / 100);
+      try { G.renderAt(Math.min(st, (sl.content && sl.content.maxTime) || Infinity)); } catch (e) { console.error(e); }
+    }
+    for (const l of vis) {
       const n = state.nodes.get(l.id); if (!n || !n.el) continue;
       const r = res.get(l.id);
       if (n.created) { if (applyContent(n, l, r.content)) n.geo = measure(n.el); }
@@ -672,6 +691,16 @@
   }
 
   // ───────────────────────────── 6. public API ─────────────────────────────
+  /** Pages that expose window.__ready (promise) / window.renderAt(t): wait until they are usable. */
+  async function waitScript(ms) {
+    const t0 = real.now();
+    while (real.now() - t0 < ms) {
+      if (G.__ready && typeof G.__ready.then === 'function') { await Promise.race([G.__ready, new Promise((r) => real.setTimeout(r, ms))]); break; }
+      if (typeof G.renderAt === 'function' || !D.querySelector('canvas')) break;
+      await new Promise((r) => real.setTimeout(r, 50));
+    }
+  }
+  function muteMedia() { D.querySelectorAll('audio, video').forEach((m) => { try { m.pause(); m.muted = true; m.autoplay = false; } catch (e) {} }); }
   function waitAssets() {
     const imgs = [...D.images].filter((i) => !i.complete).map((i) => new Promise((r) => { i.onload = i.onerror = r; }));
     return Promise.all([D.fonts ? D.fonts.ready : null, ...imgs]);
@@ -679,10 +708,20 @@
   const MR = {
     clock, valueAt, cubicBezier, selectorFor, labelFor, advanceTo,
     /** Called by the editor on a fresh (un-stripped) document. */
-    async analyze(opts) { await waitAssets(); return analyze(opts); },
+    async analyze(opts) {
+      await waitAssets(); await waitScript(5000);
+      const res = analyze(opts);
+      res.renderAt = typeof G.renderAt === 'function';
+      if (res.renderAt) res.procedural = false; // random access: renderAt(t) is a pure function of time
+      res.canvases = [...D.querySelectorAll('canvas')].filter((c) => c.width * c.height > 4096).map((c) => ({ selector: selectorFor(c), name: labelFor(c), props: { ...propsFromStatic(measure(c)), opacity: 100 } }));
+      res.media = [...D.querySelectorAll('audio[src], video[src], audio > source[src]')].map((m) => ({ src: m.getAttribute('src'), name: m.getAttribute('src').split('/').pop() }));
+      return res;
+    },
     /** Load a project and take control of the page. */
     async load(project) {
       await waitAssets();
+      if ((project.layers || []).some((l) => l.type === 'script')) await waitScript(30000);
+      muteMedia();
       if (!stripStyle) stripOriginals(null, null, true);
       // keep pseudo-element animations, but drive them from the timeline
       state.kept = D.getAnimations ? D.getAnimations().filter((a) => a.effect && a.effect.pseudoElement) : [];
@@ -749,9 +788,12 @@
     /** Exported page: autoplay in real time unless ?render */
     play(opts = {}) {
       const P = state.project; let start = null; const loop = opts.loop !== false;
-      const audio = P.audio && P.audio.url ? Object.assign(new Audio(P.audio.url), { volume: P.audio.volume ?? 1 }) : null;
+      const tracks = (P.layers || []).filter((l) => l.type === 'audio' && !l.content.mute).map((l) => ({ l, a: Object.assign(new Audio(l.content.url || l.content.src), { volume: Math.min(1, l.content.volume ?? 1) }) }));
+      if (P.audio && P.audio.url) tracks.push({ l: { inPoint: P.audio.offset || 0, content: {} }, a: Object.assign(new Audio(P.audio.url), { volume: P.audio.volume ?? 1 }) });
+      const audio = tracks.length ? { set currentTime(v) {}, play() { return Promise.resolve(); } } : null;
+      const startAudio = (t) => tracks.forEach(({ l, a }) => { const at = t - (l.inPoint || 0) + ((l.content && l.content.trim) || 0); if (at >= 0) { a.currentTime = at; a.play().catch(() => {}); } else real.setTimeout(() => a.play().catch(() => {}), -at * 1000); });
       const tick = (now) => {
-        if (start === null) { start = now; if (audio) { audio.currentTime = Math.max(0, -(P.audio.offset || 0)); audio.play().catch(() => {}); } }
+        if (start === null) { start = now; if (audio) startAudio(0); }
         let t = (now - start) / 1000;
         if (t >= P.duration) {
           if (!loop) { render(P.duration - 1e-4); return; }
@@ -763,4 +805,9 @@
     },
   };
   G.MotionRuntime = MR;
+  // Exported projects (ZIP): window.__MOTION_PROJECT__ is embedded right after this script.
+  G.addEventListener('load', () => {
+    const P = G.__MOTION_PROJECT__; if (!P) return;
+    MR.load(P).then(() => { G.__MOTION_READY__ = true; if (AUTOPLAY && !G.__MOTION_RENDER__) MR.play(); });
+  });
 })(window);

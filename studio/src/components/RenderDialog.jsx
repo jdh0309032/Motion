@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store.js';
-import { exportDocument } from '../engine/document.js';
+import { exportDocument, runtimeProject } from '../engine/document.js';
+import { writeText } from '../engine/workspace.js';
 import { saveProject } from '../engine/actions.js';
 import { Modal, Btn, Select, ScrubNumber } from './ui.jsx';
 
@@ -15,8 +16,14 @@ export default function RenderDialog({ onClose }) {
   useEffect(() => { fetch('/api/render').then((r) => r.json()).then(setServer).catch(() => setServer(false)); return () => clearInterval(poll.current); }, []);
 
   const start = async () => {
-    const html = exportDocument(S().project, S().assets);
-    const r = await fetch('/api/render', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...o, html, name: p.name }) }).then((r) => r.json());
+    const st = S(), ws = st.project.workspace;
+    let payload;
+    if (ws) {
+      for (const [f, t] of Object.entries(st.project.files || {})) await writeText(ws.id, f, t); // make sure disk == editor
+      const { files, ...rest } = st.project;
+      payload = { ...o, ws: ws.id, entry: ws.entry, project: runtimeProject({ ...rest, source: null }, st.assets), name: p.name };
+    } else payload = { ...o, html: exportDocument(st.project, st.assets), name: p.name };
+    const r = await fetch('/api/render', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).then((r) => r.json());
     if (r.error) return setJob({ error: r.error });
     setJob({ id: r.id, frame: 0, total: 1 });
     poll.current = setInterval(async () => {

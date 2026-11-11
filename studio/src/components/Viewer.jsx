@@ -6,7 +6,8 @@ import { getValue, setValue } from '../engine/project.js';
 import { draftTarget } from '../store.js';
 import { addElementLayer, addImageLayer } from '../engine/actions.js';
 import { Select, IconBtn, cx } from './ui.jsx';
-import { Grid3x3, Loader2 } from 'lucide-react';
+import { Grid3x3, Loader2, RotateCw } from 'lucide-react';
+import * as WS from '../engine/workspace.js';
 
 const S = () => useStore.getState();
 
@@ -21,7 +22,7 @@ export default function Viewer() {
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
   const [hover, setHover] = useState(null);
-  const live = useRef({ lastT: 0, reloading: false, raf: 0 });
+  const live = useRef({ lastT: 0, reloading: false, raf: 0, nonce: 0, writeTimer: 0 });
 
   // fit
   useEffect(() => {
@@ -46,9 +47,26 @@ export default function Viewer() {
       } catch (e) { console.error(e); S().toast('런타임 오류: ' + e.message); }
       live.current.reloading = false; setLoading(false); redrawOverlay();
     };
-    f.srcdoc = withRuntime(preferLocalVendors(S().project.source));
+    const ws = S().project.workspace;
+    if (ws) { f.removeAttribute('srcdoc'); f.src = WS.pageUrl(ws.id, ws.entry, ++live.current.nonce); }
+    else f.srcdoc = withRuntime(preferLocalVendors(S().project.source));
   }, [redrawOverlay]);
   useEffect(() => { boot(); }, [sourceRev, boot]);
+
+  // edited code files → disk → reload the page (also on undo/redo of code edits)
+  useEffect(() => useStore.subscribe((s, p) => {
+    const ws = s.project.workspace;
+    if (!ws || s.project.files === p.project.files || s.sourceRev !== p.sourceRev) return;
+    const changed = Object.keys(s.project.files || {}).filter((k) => s.project.files[k] !== p.project.files?.[k]);
+    const gone = Object.keys(p.project.files || {}).filter((k) => !(k in (s.project.files || {})));
+    clearTimeout(live.current.writeTimer);
+    live.current.writeTimer = setTimeout(async () => {
+      const cur = S();
+      for (const k of changed) await WS.writeText(ws.id, k, cur.project.files[k] ?? '').catch((e) => cur.toast('저장 실패: ' + e.message));
+      for (const k of gone) if (cur.fileCache[k] != null) await WS.writeText(ws.id, k, cur.fileCache[k]);
+      live.current.reloading = true; boot();
+    }, 350);
+  }), [boot]);
 
   // project/time → runtime
   useEffect(() => useStore.subscribe((s, p) => {
@@ -125,6 +143,7 @@ export default function Viewer() {
         <span className="num">{W}×{H}</span>
         {procedural && <span className="rounded bg-amber-500/15 px-1.5 text-amber-300" title="캔버스/WebGL 등 스크립트로 그리는 부분은 원본 그대로 가상 시계로 구동됩니다 (뒤로 이동 시 다시 로드)">Script layer</span>}
         <span className="flex-1" />
+        <IconBtn icon={RotateCw} title="미리보기 다시 불러오기" onClick={() => { live.current.reloading = true; boot(); }} />
         <IconBtn icon={Grid3x3} title="세이프 영역 가이드" active={guides} onClick={() => S().setUi({ guides: !guides })} />
         <Select value={zoom} onChange={(v) => S().setUi({ viewZoom: v })} options={[{ value: 'fit', label: `Fit (${Math.round(fit * 100)}%)` }, ...['0.25', '0.5', '1', '2'].map((v) => ({ value: v, label: `${v * 100}%` }))]} />
       </div>

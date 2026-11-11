@@ -36,9 +36,9 @@ test('string / color interpolation', () => {
 
 test('editor valueAt is identical to the runtime valueAt', () => {
   const src = fs.readFileSync(new URL('../runtime/motion-runtime.js', import.meta.url), 'utf8');
-  const fake = { requestAnimationFrame() {}, performance: { now: () => 0 }, setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {}, document: {} };
+  const fake = { requestAnimationFrame() {}, performance: { now: () => 0 }, setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {}, document: {}, location: { search: '' }, history: {}, addEventListener() {} };
   fake.window = fake;
-  vm.runInNewContext(src.replace(/\}\)\(window\);\s*$/, '})(this.window);'), { window: fake, Date, Math, Map, Set, Promise, DOMMatrix: class {}, DOMPoint: class {} });
+  vm.runInNewContext(src.replace(/\}\)\(window\);\s*$/, '})(this.window);'), { window: fake, Date, Math: Object.create(Math), Map, Set, Promise, DOMMatrix: class {}, DOMPoint: class {} });
   const rt = fake.MotionRuntime.valueAt;
   const keys = [{ t: 0, v: 3, ease: [0.2, 0.8, 0.2, 1] }, { t: 0.7, v: -40, ease: [0.68, -0.6, 0.32, 1.6] }, { t: 1.9, v: 12, hold: true, ease: [0, 0, 1, 1] }, { t: 2.5, v: 90 }];
   for (const loop of [undefined, 'cycle', 'pingpong'])

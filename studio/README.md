@@ -12,6 +12,34 @@ npx playwright install chromium   # 렌더러용, 최초 1회
 npm run dev                       # http://localhost:5173
 ```
 
+## 여는 것
+
+| 대상 | 방법 | 결과 |
+|---|---|---|
+| HTML 파일 하나 | 끌어다 놓기 / 파일 → HTML 열기 | CSS·GSAP → 키프레임 레이어 |
+| **프로젝트 폴더** (ES 모듈, Three.js, 폰트, 오디오 …) | 파일 → 폴더 열기 (서버의 폴더 탐색) · 폴더 끌어다 놓기 · 폴더 업로드 | 아래 레이어 타입이 자동으로 생성 |
+
+폴더 프로젝트는 개발 서버가 그대로 제공하므로 상대 경로 모듈/폰트/오디오가 모두 동작합니다. `npm install`을 안 한 폴더도
+`three`, `gsap` 같은 흔한 패키지는 스튜디오의 `node_modules`에서 대신 제공합니다. 기본 탐색 위치는 이 저장소의 상위 폴더
+(Codespaces에선 `/workspaces`)이고 `MOTION_ROOTS=/경로1:/경로2 npm run dev`로 바꿀 수 있습니다.
+
+### 레이어 타입 — 한 타임라인에서 함께 편집
+
+| 타입 | 무엇 | 편집 |
+|---|---|---|
+| **Element** | 원본 HTML 요소 (CSS/WAAPI/GSAP에서 가져옴, 또는 클릭해서 지정) | 트랜스폼·불투명도·이펙트 키프레임, 부모-자식 |
+| **Script** | 페이지 코드가 그리는 Canvas/WebGL(Three.js 등) | `window.renderAt(t)`가 있으면 임의 시점으로 정확히 이동(없으면 가상 시계). 시작점 = 시간 오프셋, Time Stretch, 트랜스폼·이펙트·블렌드 |
+| **Code** | JS 모듈의 `export const` 값 (예: `timeline.js`) | 숫자·문자열·불리언 즉석 수정, 시간 값은 마커, `[시작, 끝]`은 구간 바로 드래그 → **소스 코드의 그 값만** 다시 씀. 계산식 값(예: `KICKS`)은 실행 중인 모듈에서 읽어 회색 마커로 표시 |
+| **Audio** | 프로젝트 오디오 파일·추가한 오디오 (여러 개) | 파형, 시작점 드래그, 볼륨, 앞부분 트림, 음소거, 비트 감지 — 미리보기와 렌더에서 믹스 |
+| Text / Shape / Solid / Null / Image | 에디터에서 새로 만든 레이어 | 위 모든 레이어 위에 합성 |
+
+**Code 탭**: 파일 트리 + 코드 편집기. 입력 0.6초 뒤 자동 저장, 미리보기 즉시 재로드. 코드 수정도 Ctrl+Z로 되돌릴 수 있고
+되돌리면 디스크 파일도 되돌아갑니다. (코드 수정은 폴더의 파일에 바로 기록됩니다 — git으로 관리하는 것을 권장)
+
+**저장/내보내기** (폴더 프로젝트): `Ctrl+S` → 폴더에 `motion.project.json`(레이어·키프레임·이펙트) 저장, 다음에 폴더를 열면 그대로 복원.
+`파일 → ZIP 내보내기` → 폴더 전체 + 편집 내용이 들어간 ZIP (정적 서버로 열면 편집한 그대로 재생).
+렌더는 Script/Element/새 레이어를 합성하고 모든 Audio 레이어를 믹스합니다.
+
 ## 작동 방식
 
 1. **가져오기** — HTML을 끌어다 놓으면 런타임이 페이지를 가상 시계로 돌리면서 CSS `@keyframes`,
@@ -43,7 +71,11 @@ npm run dev                       # http://localhost:5173
 
 ```bash
 npm run render -- my.motion.html -o out.mp4            # --format webm|mov|gif --fps 60 --scale 2 --start 0 --end 4
+npm run render -- ../my-project-folder                 # 폴더 프로젝트 (motion.project.json 저장 후) → 폴더/out/*.mp4
 ```
+
+WebGL은 기본적으로 SwiftShader(CPU)로 렌더해 어디서나 같은 결과가 나옵니다. GPU가 있는 PC에서는 `MOTION_GPU=1 npm run dev`
+(또는 `MOTION_GPU=1 npm run render …`)로 훨씬 빠르게 렌더할 수 있습니다.
 
 ## 단축키
 
@@ -69,7 +101,8 @@ test/fidelity.mjs               원본 vs 변환 결과 위치 비교 회귀 테
 
 ## 알려진 한계
 
-- HTML 안의 **상대 경로 이미지/폰트**는 불러올 수 없습니다 (파일 하나만 읽기 때문). data URI나 절대 URL을 쓰세요.
+- **HTML 파일 하나**로 열면 상대 경로 이미지/폰트를 불러올 수 없습니다 → 폴더째 여세요.
+- 코드 레이어는 리터럴 값만 직접 수정합니다. 계산식(`60 / BPM`, `range(...)`)은 Code 탭에서 고칩니다.
 - 원본 HTML 요소 레이어의 **쌓임 순서**는 문서 순서를 따릅니다. 새로 만든 레이어만 순서를 바꿀 수 있습니다.
 - 스크립트로 매 프레임 DOM 스타일을 직접 바꾸는 애니메이션은 키프레임으로 변환되지 않고 원본대로 재생됩니다.
 - 원본 GSAP의 SVG `attr`, MotionPath, SplitText 같은 플러그인 트윈은 아직 변환하지 않습니다.

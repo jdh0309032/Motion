@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore } from '../store.js';
 import { LAYER_TYPES } from '../engine/project.js';
-import { addLayer, saveProject, importFiles, newProject, duplicateLayers, deleteSelection, copyKeys, pasteKeys, setEaseSelected, download } from '../engine/actions.js';
+import { addLayer, saveProject, importFiles, newProject, duplicateLayers, deleteSelection, copyKeys, pasteKeys, setEaseSelected, download, exportWorkspaceZip } from '../engine/actions.js';
 import { exportDocument } from '../engine/document.js';
 import { EASE_PRESETS } from '../engine/bezier.js';
 import { IconBtn, fmtTime, cx } from './ui.jsx';
@@ -29,7 +29,8 @@ function Menu({ label, items }) {
   );
 }
 
-export default function MenuBar({ onRender, onComp }) {
+export default function MenuBar({ onRender, onComp, onFolder }) {
+  const isWs = useStore((s) => !!s.project.workspace);
   const time = useStore((s) => s.time), fps = useStore((s) => s.project.fps), dur = useStore((s) => s.project.duration);
   const playing = useStore((s) => s.playing), name = useStore((s) => s.project.name);
   const canUndo = useStore((s) => s.past.length > 0), canRedo = useStore((s) => s.future.length > 0);
@@ -40,11 +41,12 @@ export default function MenuBar({ onRender, onComp }) {
     <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line bg-panel px-2">
       <div className="mr-2 flex items-center gap-1.5 font-semibold"><Clapperboard size={16} className="text-acc" /> Motion Studio</div>
       <Menu label="파일" items={[
-        { label: 'HTML 모션그래픽 열기…', key: 'Ctrl+O', do: open },
+        { label: '폴더 프로젝트 열기… (멀티 파일 · Three.js)', key: 'Ctrl+Shift+O', do: onFolder },
+        { label: 'HTML 파일 열기…', key: 'Ctrl+O', do: open },
         { label: '새 컴포지션', key: '', do: () => newProject() },
         '-',
-        { label: '프로젝트 저장 (.motion.html)', key: 'Ctrl+S', do: saveProject },
-        { label: '재생용 HTML 내보내기', key: '', do: exportHtml },
+        { label: isWs ? '프로젝트 저장 (폴더에 motion.project.json)' : '프로젝트 저장 (.motion.html)', key: 'Ctrl+S', do: saveProject },
+        isWs ? { label: 'ZIP 내보내기 (폴더 전체 + 편집 내용, 바로 재생)', key: '', do: exportWorkspaceZip } : { label: '재생용 HTML 내보내기', key: '', do: exportHtml },
         '-',
         { label: '렌더 (MP4 / WebM / ProRes / GIF)…', key: 'Ctrl+M', do: onRender },
       ]} />
@@ -59,6 +61,8 @@ export default function MenuBar({ onRender, onComp }) {
       ]} />
       <Menu label="레이어" items={[
         ...['text', 'rect', 'ellipse', 'solid', 'null'].map((t) => ({ label: `새 ${LAYER_TYPES[t].label}`, key: t === 'text' ? 'Ctrl+T' : '', do: () => addLayer(t) })),
+        '-',
+        { label: '오디오 레이어 추가… (파일)', key: '', do: () => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'audio/*'; i.onchange = () => importFiles([...i.files]); i.click(); } },
       ]} />
       <Menu label="애니메이션" items={[
         { label: 'Easy Ease', key: 'F9', do: () => setEaseSelected(EASE_PRESETS.easyEase) },

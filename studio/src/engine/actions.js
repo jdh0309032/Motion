@@ -1,7 +1,7 @@
 // High-level editor actions (used by menus, panels and shortcuts).
 import { useStore, draftTarget, targetOf } from '../store.js';
 import { createProject, createLayer, elementLayer, createEffect, applyPreset, setValue, getValue, EFFECTS, LAYER_TYPES, wouldCycle } from './project.js';
-import { parseDocument, guessSize, analyzeSource, exportDocument } from './document.js';
+import { parseDocument, guessSize, analyzeSource, exportDocument, runtimeProject } from './document.js';
 import { newId, sortKeys } from './keyframes.js';
 import { decode, detectBeats, envelope, bufferOf } from './audio.js';
 
@@ -34,7 +34,7 @@ export async function importFiles(files) {
     if (kind === 'image') { const img = new Image(); img.src = url; await img.decode().catch(() => {}); asset.meta = { width: img.naturalWidth, height: img.naturalHeight }; }
     if (kind === 'audio') { try { const b = await decode(asset); asset.meta = { duration: b.duration }; } catch (e) { S().toast('오디오 디코딩 실패'); continue; } }
     S().addAsset(asset);
-    if (kind === 'audio' && !S().project.audio.assetId) setAudio(asset.id);
+    if (kind === 'audio') addAudioLayer(null, f.name, asset.id);
     S().toast(`에셋 추가: ${f.name}`);
   }
 }
@@ -130,6 +130,7 @@ export function setParent(childId, parentId, rt) {
 }
 
 export function saveProject() {
+  if (S().project.workspace) return saveWorkspace();
   const { project, assets } = S();
   const html = exportDocument(project, assets);
   download(new Blob([html], { type: 'text/html' }), `${project.name || 'motion'}.motion.html`);
@@ -185,24 +186,136 @@ export function pulseOnBeats(path = 'scale', amount = 12) {
   });
   S().toast(`비트 ${beats.length}개에 ${path} 펄스 적용`);
 }
+/** Audio layer source URL (workspace file or embedded asset). */
+export const audioUrl = (l) => (l.content.assetId ? S().assets[l.content.assetId]?.url : S().project.workspace && l.content.src ? WS.fileUrl(S().project.workspace.id, l.content.src) : null);
+export const audioKey = (l) => { const u = audioUrl(l); return u ? { id: u.length > 200 ? l.content.assetId : u, url: u } : null; };
+/** Selected audio layer, else the first one. */
+export const activeAudio = () => { const { project, sel } = S(); const a = project.layers.filter((l) => l.type === 'audio'); return a.find((l) => sel.layers.includes(l.id)) || a[0]; };
 export async function runBeatDetection() {
-  const { project, assets } = S(); const a = assets[project.audio.assetId]; if (!a) return S().toast('컴포지션 오디오가 없습니다');
-  const buf = bufferOf(a.id) || (await decode(a));
+  const l = activeAudio(); const k = l && audioKey(l); if (!k) return S().toast('오디오 레이어가 없습니다');
+  const buf = bufferOf(k.id) || (await decode(k));
   const { onsets, bpm } = detectBeats(buf);
-  S().mutate((d) => { d.audio.beats = onsets.map((t) => +(t + (d.audio.offset || 0)).toFixed(4)); d.audio.bpm = bpm; });
+  S().mutate((d) => { d.audio.beats = onsets.map((t) => +(t - (l.content.trim || 0) + (l.inPoint || 0)).toFixed(4)).filter((t) => t >= 0); d.audio.bpm = bpm; });
   S().toast(`비트 ${onsets.length}개 감지 · 추정 BPM ${bpm}`);
 }
 export async function audioToKeys(lo = 100, hi = 130) {
-  const { project, assets, sel } = S(); const a = assets[project.audio.assetId];
-  if (!a) return S().toast('컴포지션 오디오가 없습니다');
+  const { sel } = S(); const l = activeAudio(); const k = l && audioKey(l);
+  if (!k) return S().toast('오디오 레이어가 없습니다');
   if (!sel.path) return S().toast('타임라인에서 속성을 선택하세요');
-  const buf = bufferOf(a.id) || (await decode(a));
+  const buf = bufferOf(k.id) || (await decode(k));
   const env = envelope(buf, project.fps);
   S().mutate((d) => {
     const t = draftTarget(d, sel.path.target); if (!t) return;
-    t.tracks[sel.path.path] = env.map((v, i) => ({ id: newId('k'), t: +((i / d.fps) + (d.audio.offset || 0)).toFixed(4), v: +(lo + (hi - lo) * v).toFixed(3), ease: [0, 0, 1, 1] })).filter((k) => k.t <= d.duration);
+    t.tracks[sel.path.path] = env.map((v, i) => ({ id: newId('k'), t: +((i / d.fps) - (l.content.trim || 0) + (l.inPoint || 0)).toFixed(4), v: +(lo + (hi - lo) * v).toFixed(3), ease: [0, 0, 1, 1] })).filter((k) => k.t <= d.duration);
   });
   S().toast('오디오 진폭 → 키프레임 변환 완료');
 }
 export function setAudio(assetId) { S().mutate((d) => { d.audio = { ...d.audio, assetId, beats: [], bpm: 0 }; }); }
 export { LAYER_TYPES };
+
+// ───────── folder (workspace) projects ─────────
+import * as WS from './workspace.js';
+import { parseParams, setParam, findLeaf, compMeta, hasParams } from './codeparams.js';
+import { fileText } from '../store.js';
+
+const CODE_SKIP = /(^|\/)(node_modules|dist|build|scripts|test|tests|out)\//;
+const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
+
+/** Open a folder served by the dev server. Uses motion.project.json when present. */
+export async function openWorkspace(root, entry) {
+  S().setBusy('프로젝트 폴더 여는 중…');
+  try {
+    const id = root.id || root;
+    const { files, root: abs } = await WS.tree(id);
+    const name = abs.split(/[\\/]/).pop();
+    if (files.some((f) => f.path === 'motion.project.json') && !entry) {
+      const project = JSON.parse(await WS.readText(id, 'motion.project.json'));
+      project.workspace = { ...project.workspace, id, root: abs };
+      project.files = {};
+      S().loadProject(project, project.assets || {}, {});
+      S().toast(`프로젝트 열기: ${project.name}`);
+      return;
+    }
+    entry ||= files.find((f) => f.path === 'index.html')?.path || files.find((f) => /\.html?$/i.test(f.path))?.path;
+    if (!entry) throw new Error('HTML 파일이 없는 폴더입니다');
+    const html = await WS.readText(id, entry);
+    // code modules with literal parameters
+    const jsFiles = files.filter((f) => /\.(m?js)$/i.test(f.path) && !CODE_SKIP.test(f.path) && f.size < 400000);
+    const cache = { [entry]: html }, codeFiles = [];
+    let meta = {};
+    for (const f of jsFiles) { const t = await WS.readText(id, f.path); cache[f.path] = t; if (hasParams(t)) { codeFiles.push(f.path); meta = { ...compMeta(t), ...meta }; } }
+    const size = meta.width && meta.height ? { width: meta.width, height: meta.height } : guessSize(html);
+    const fps = meta.fps || 30;
+    S().setBusy('애니메이션 분석 중… (CSS · GSAP · Canvas/WebGL · 오디오)');
+    const res = await analyzeSource(null, { ...size, fps: Math.min(fps, 30), maxDuration: meta.duration || 30, url: WS.pageUrl(id, entry, Date.now()) });
+    const duration = meta.duration || Math.max(3, res.duration);
+    const project = createProject({ name, ...size, fps, duration, source: null, procedural: res.procedural, workspace: { id, root: abs, entry } });
+    const L = [];
+    for (const c of res.canvases || []) L.push(elementLayer({ ...c, name: `Script · ${c.name}` }, project, L.length));
+    L.forEach((l) => { l.type = 'script'; l.content = { speed: 100 }; });
+    L.push(...res.layers.map((l, i) => elementLayer(l, project, L.length + i)).reverse());
+    for (const m of res.media || []) {
+      const src = new URL(m.src, 'http://x/' + entry).pathname.slice(1);
+      L.push(createLayer('audio', project, { name: m.name, content: { src, volume: 1, mute: false, trim: 0 }, inPoint: 0, outPoint: duration }));
+    }
+    const numCount = (t) => { let n = 0; const w = (p) => { if (p.kind === 'number') n++; (p.children || []).forEach(w); }; parseParams(t).params.forEach(w); return n; };
+    codeFiles.sort((a, b) => numCount(cache[b]) - numCount(cache[a]));
+    for (const f of codeFiles) L.push(createLayer('code', project, { name: f.split('/').pop(), content: { file: f }, inPoint: 0, outPoint: duration }));
+    L.forEach((l) => { l.outPoint = duration; });
+    project.layers = L;
+    S().loadProject(project, {}, cache);
+    S().toast(`폴더 가져오기: 레이어 ${L.length}개 (스크립트 ${res.canvases?.length || 0} · 요소 ${res.layers.length} · 오디오 ${res.media?.length || 0} · 코드 ${codeFiles.length})${res.renderAt ? ' · renderAt(t) 감지' : ''}`);
+  } catch (e) { console.error(e); S().toast('폴더 열기 실패: ' + e.message); }
+  finally { S().setBusy(null); }
+}
+
+export async function uploadAndOpen(name, files) {
+  S().setBusy(`업로드 중… 0/${files.length}`);
+  try {
+    const r = await WS.uploadFolder(name, files, (i, n) => S().setBusy(`업로드 중… ${i}/${n}`));
+    await openWorkspace(r.id);
+  } catch (e) { S().toast('업로드 실패: ' + e.message); S().setBusy(null); }
+}
+
+/** Ensure a workspace file is loaded into the cache. */
+export async function loadFile(path) {
+  const s = S(); const ws = s.project.workspace; if (!ws) return '';
+  if (fileText(s, path) != null) return fileText(s, path);
+  const t = await WS.readText(ws.id, path); S().cacheFile(path, t); return t;
+}
+/** Edit a file (undoable). Disk write + preview reload happen in the viewer sync. */
+export function editFile(path, text, merge) {
+  S().mutate((d) => {
+    d.files[path] = text;
+    const m = compMeta(text);
+    if (m.duration && m.duration !== d.duration) { d.duration = m.duration; d.layers.forEach((l) => { l.outPoint = Math.max(l.outPoint, m.duration); }); }
+    if (m.fps) d.fps = m.fps;
+    if (m.width) d.width = m.width;
+    if (m.height) d.height = m.height;
+  }, { merge: merge || 'file-' + path });
+}
+/** Change one literal in a code module. */
+export function setCodeParam(file, path, value, merge) {
+  const text = fileText(S(), file); if (text == null) return;
+  const leaf = findLeaf(text, path); if (!leaf) return;
+  editFile(file, setParam(text, leaf, value), merge || 'param-' + file + path.join('.'));
+}
+export async function saveWorkspace() {
+  const { project, assets } = S(); const ws = project.workspace;
+  const { files, ...rest } = project;
+  for (const [p, t] of Object.entries(files || {})) await WS.writeText(ws.id, p, t);
+  await WS.writeText(ws.id, 'motion.project.json', JSON.stringify({ ...rest, assets }, null, 2));
+  S().toast('저장 완료: motion.project.json + 수정한 코드 파일 (폴더에 기록)');
+}
+export async function exportWorkspaceZip() {
+  const { project, assets } = S(); const ws = project.workspace;
+  const { files, ...rest } = project;
+  for (const [p, t] of Object.entries(files || {})) await WS.writeText(ws.id, p, t);
+  const blob = await WS.exportZip(ws.id, ws.entry, runtimeProject({ ...rest, source: null }, assets));
+  download(blob, `${project.name}.zip`);
+  S().toast('ZIP 내보내기 완료 — 정적 서버로 열면 편집한 그대로 재생됩니다');
+}
+export function addAudioLayer(src, name, assetId = null) {
+  return addLayer('audio', { name, content: { src, assetId, volume: 1, mute: false, trim: 0 } });
+}
+export { WS, AUDIO_EXT };

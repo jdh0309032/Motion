@@ -16,7 +16,7 @@ function PropRow({ t, path, def }) {
   const showSlider = def.min != null && def.max != null && def.max - def.min <= 1000;
   return (
     <div className="flex min-h-[24px] items-center gap-1.5">
-      {!def.type ? <Stopwatch on={animated} onClick={watch} /> : <span className="w-[17px]" />}
+      {!def.type && !def.noAnim ? <Stopwatch on={animated} onClick={watch} /> : <span className="w-[17px]" />}
       <span className="w-[108px] shrink-0 truncate text-mute">{def.label}</span>
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {def.type === 'color' ? <ColorInput value={v} onChange={(c) => S().mutate((d) => setBase(draftTarget(d, t.id), path, c), { merge: 'col' + path })} />
@@ -84,7 +84,23 @@ export default function Inspector() {
         </Section>
       )}
 
-      {!isComp && (
+      {t.type === 'audio' && (
+        <Section title="Audio">
+          <div className="mb-1.5 break-all rounded bg-app px-1.5 py-1 font-mono text-[10px] text-mute">{t.content.src || project.layers && (useStore.getState().assets[t.content.assetId]?.name ?? '—')}</div>
+          <div className="mb-1 grid grid-cols-[108px_1fr] items-center gap-1.5 pl-[23px]"><span className="text-mute">Start (In)</span><ScrubNumber value={t.inPoint} step={1 / project.fps} unit="s" decimals={3} onChange={(v) => S().mutate((d) => { const l = draftTarget(d, t.id); const len = l.outPoint - l.inPoint; l.inPoint = +v.toFixed(4); l.outPoint = +(v + len).toFixed(4); }, { merge: 'ain' })} /></div>
+        </Section>
+      )}
+      {t.type === 'code' && (
+        <Section title="Code Parameters">
+          <div className="mb-1.5 break-all rounded bg-app px-1.5 py-1 font-mono text-[11px] text-violet-200">{t.content.file}</div>
+          <div className="text-[11px] leading-relaxed text-mute">타임라인에서 이 레이어를 펼치면 <b className="text-fg">export const</b> 값이 나옵니다. 숫자·문자열은 바로 수정, 시간 값은 보라색 마커/구간을 드래그하세요. 수정은 코드 파일에 그대로 기록되고(Ctrl+Z 가능) 미리보기가 다시 로드됩니다. 계산식으로 만든 값은 회색(읽기 전용) — Code 탭에서 수정합니다.</div>
+        </Section>
+      )}
+      {t.type === 'script' && (
+        <div className="border-b border-line px-2 py-1.5 text-[11px] text-mute">스크립트 레이어: 페이지 코드가 직접 그리는 캔버스. <span className="text-fg">window.renderAt(t)</span>가 있으면 임의 시점으로 정확히 이동하고, 없으면 가상 시계로 구동합니다. 레이어 시작(In) = 시간 오프셋, Time Stretch = 속도.</div>
+      )}
+
+      {!isComp && !LAYER_TYPES[t.type]?.noTransform && (
         <Section title="Transform">
           {TRANSFORM.map((p) => <PropRow key={p.key} t={t} path={p.key} def={p} />)}
         </Section>
@@ -102,10 +118,10 @@ export default function Inspector() {
         </Section>
       )}
 
-      <Section title={isComp ? 'Composition Effects (Adjustment)' : 'Effects'}>
+      {!LAYER_TYPES[t.type]?.noTransform && <Section title={isComp ? 'Composition Effects (Adjustment)' : 'Effects'}>
         {t.effects.length === 0 && <div className="py-1 text-mute">왼쪽 Effects & Presets 패널에서 이펙트를 더블클릭해 적용하세요.</div>}
         {t.effects.map((fx, i) => <EffectBlock key={fx.id} t={t} fx={fx} i={i} />)}
-      </Section>
+      </Section>}
 
       {isComp && (
         <Section title="Composition">

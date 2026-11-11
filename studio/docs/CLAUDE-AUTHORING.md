@@ -22,6 +22,17 @@ Following it makes every animation importable as layers + keyframes in Motion St
 - Don't animate the same property of the same element from two systems at once.
 - Static centring like `transform: translate(-50%, -50%)` is fine.
 
+## Multi-file projects (Three.js, shaders, audio)
+- A folder with `index.html` is fine (ES modules, import maps to `./node_modules/...`, fonts and audio files in the folder).
+- Expose `window.renderAt = (t) => { … }` that draws the frame for time `t` (seconds) as a pure function of `t`, and
+  `window.__ready = <promise>` that resolves when assets are loaded. When the URL has `?render`, don't start your own
+  preview player. Motion Studio then seeks the scene exactly to any frame.
+- Put every timing/tunable value in one module as **literal** `export const` values, e.g.
+  `export const T = { burst: 2.85, drop: 7.0 }`, `export const SCENES = { intro: [0, 3] }`,
+  `export const KEYWORDS = [{ text: '…', appear: 3.0 }]`, plus `DURATION`, `FPS`, `WIDTH`, `HEIGHT`.
+  These become draggable timeline markers / bars and inline fields (the editor rewrites only those literals).
+- Reference audio with `<audio src="…">` in the page; it becomes an audio layer.
+
 ## Script-driven parts (allowed)
 - `<canvas>`, WebGL/Three.js, particles: drive them from the `requestAnimationFrame` timestamp or `performance.now()`.
   They run frame-exactly on Motion Studio's virtual clock (`Math.random` is seeded, so results are repeatable).

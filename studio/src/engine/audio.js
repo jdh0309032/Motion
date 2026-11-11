@@ -59,15 +59,20 @@ export function beatGrid(bpm, duration, phase = 0) {
   const out = []; for (let t = phase; t < duration; t += 60 / bpm) out.push(+t.toFixed(4)); return out;
 }
 
-let src = null, gain = null;
-export function playAudio(asset, compTime, offset = 0, volume = 1) {
+let playing = [];
+/** Play every audio track from comp time t. tracks: [{ key:{id,url}, at, trim, volume }] */
+export function playAudio(tracks, compTime) {
   stopAudio();
-  const buf = asset && buffers.get(asset.id); if (!buf) return;
   const c = ac(); if (c.state === 'suspended') c.resume();
-  src = c.createBufferSource(); src.buffer = buf;
-  gain = c.createGain(); gain.gain.value = volume;
-  src.connect(gain).connect(c.destination);
-  const at = compTime - offset;
-  if (at >= 0) src.start(0, at); else src.start(c.currentTime - at, 0);
+  for (const tr of tracks) {
+    const buf = tr.key && buffers.get(tr.key.id); if (!buf) continue;
+    const src = c.createBufferSource(); src.buffer = buf;
+    const g = c.createGain(); g.gain.value = tr.volume ?? 1;
+    src.connect(g).connect(c.destination);
+    const at = compTime - (tr.at || 0) + (tr.trim || 0);
+    if (at >= buf.duration) continue;
+    if (at >= 0) src.start(0, at); else src.start(c.currentTime - at, tr.trim || 0);
+    playing.push(src);
+  }
 }
-export function stopAudio() { try { src?.stop(); } catch (e) {} src = null; }
+export function stopAudio() { for (const s of playing) { try { s.stop(); } catch (e) {} } playing = []; }

@@ -1,23 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useStore, targetOf, draftTarget } from '../store.js';
+import { useStore, targetOf, draftTarget, fileText } from '../store.js';
 import { propertyGroups, pathLabel, paramDef, getValue, setValue, toggleStopwatch, addKeyHere, EFFECTS, BLEND_MODES } from '../engine/project.js';
 import { keyAt, sortKeys } from '../engine/keyframes.js';
-import { setParent, removeEffect, runBeatDetection, pulseOnBeats, snapKeysToBeats, audioToKeys, moveLayer } from '../engine/actions.js';
+import { setParent, removeEffect, runBeatDetection, pulseOnBeats, snapKeysToBeats, audioToKeys, moveLayer, setCodeParam, audioKey, activeAudio } from '../engine/actions.js';
+import { parseParams, isTimeLike, isTimeSpan } from '../engine/codeparams.js';
+import { onRT } from '../engine/bridge.js';
+import * as WS from '../engine/workspace.js';
 import { getRT } from '../engine/bridge.js';
 import { peaks, decode, bufferOf } from '../engine/audio.js';
 import { ScrubNumber, Stopwatch, IconBtn, Select, cx, fmtTime } from './ui.jsx';
 import GraphEditor from './GraphEditor.jsx';
-import { Eye, EyeOff, Lock, Unlock, ChevronRight, ChevronLeft, Diamond, LineChart, Magnet, Music, Trash2, Power, Link2 } from 'lucide-react';
+import { Eye, EyeOff, Lock, Unlock, ChevronRight, ChevronLeft, Diamond, LineChart, Magnet, Music, Trash2, Power, Link2, Braces, Cpu, VolumeX } from 'lucide-react';
 
 export const ROW = 22, LEFT = 380, RULER = 26;
 const S = () => useStore.getState();
 
 /** Flatten layers → visible rows. */
-function buildRows(project, expanded, animOnly) {
+/** Code layer → parameter rows (tree, depth ≤ 3). evals: evaluated exports for computed values. */
+function codeRows(t, text, evals, expanded, duration) {
+  const out = [];
+  const { params, error } = parseParams(text || '');
+  if (error) { out.push({ kind: 'param', id: t.id, error }); return out; }
+  const walk = (p, depth, label) => {
+    const key = t.id + ':' + p.path.join('.');
+    const numArr = p.kind === 'array' && p.children.length && p.children.every((c) => c.kind === 'number');
+    if (p.kind === 'computed') {
+      const ev = p.path.reduce((o, k) => (o == null ? o : o[k]), evals);
+      if (Array.isArray(ev) && ev.length && ev.every((v) => typeof v === 'number')) out.push({ kind: 'param', id: t.id, p, depth, label, computed: ev, time: ev.every((v) => v >= 0 && v <= duration * 1.5) });
+      else if (typeof ev === 'number' || typeof ev === 'string') out.push({ kind: 'param', id: t.id, p, depth, label, computed: ev });
+      return;
+    }
+    const group = p.kind === 'object' || p.kind === 'array';
+    out.push({ kind: 'param', id: t.id, p, depth, label, key, group });
+    if (group && (expanded[key] ?? depth < 1) && !(numArr && p.children.length > 6) && !isTimeSpan(p, duration) && depth < 3) {
+      for (const c of p.children) {
+        const first = c.kind === 'object' && c.children.find((x) => x.kind === 'string');
+        walk(c, depth + 1, p.kind === 'array' ? `[${c.name}]${first ? ' ' + first.value : ''}` : c.name);
+      }
+    }
+  };
+  for (const p of params) walk(p, 0, p.name);
+  return out;
+}
+
+function buildRows(project, expanded, animOnly, files, evals) {
   const rows = [];
   const addTarget = (t, idx) => {
     rows.push({ kind: 'layer', id: t.id, idx });
     if (!expanded[t.id]) return;
+    if (t.type === 'code') { rows.push(...codeRows(t, files(t.content.file), evals[t.content.file] || {}, expanded, project.duration)); return; }
     for (const g of propertyGroups(t, t.id === 'comp')) {
       const paths = animOnly ? g.paths.filter((p) => t.tracks?.[p]?.length) : g.paths;
       if (!paths.length && (animOnly || !g.fx)) continue;
@@ -43,7 +74,9 @@ export default function Timeline() {
   const [laneW, setLaneW] = useState(800);
   const { pxPerSec: pps, scrollX } = ui;
   const fps = project.fps;
-  const rows = useMemo(() => buildRows(project, ui.expanded, animOnly), [project, ui.expanded, animOnly]);
+  const fileCache = useStore((s) => s.fileCache);
+  const evals = useEvaluated(project);
+  const rows = useMemo(() => buildRows(project, ui.expanded, animOnly, (f) => project.files?.[f] ?? fileCache[f], evals), [project, ui.expanded, animOnly, fileCache, evals]);
   const xOf = (t) => t * pps - scrollX;
   const tOf = (x) => (x + scrollX) / pps;
   const snapFrame = (t) => Math.round(t * fps) / fps;
@@ -169,7 +202,6 @@ export default function Timeline() {
   const step = [1 / fps, 2 / fps, 5 / fps, 10 / fps, 0.5, 1, 2, 5, 10, 30].find((s) => s * pps >= 60) || 30;
   for (let t = Math.floor(tOf(0) / step) * step; t <= Math.min(project.duration, tOf(laneW)); t += step) ticks.push(+t.toFixed(6));
 
-  const audioAsset = assets[project.audio.assetId];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-panel">
@@ -202,7 +234,7 @@ export default function Timeline() {
         <div ref={bodyRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden">
           <div className="relative" style={{ height: Math.max(rows.length * ROW, 40) }}>
             {rows.map((row, i) => (
-              <Row key={row.kind + row.id + (row.path || row.name || '')} row={row} i={i} project={project} sel={sel} time={time}
+              <Row key={row.kind + row.id + (row.path || row.name || (row.p ? row.p.path.join('.') : '') || row.error || '')} row={row} i={i} project={project} sel={sel} time={time}
                 xOf={xOf} pps={pps} keyDown={keyDown} barDown={barDown} laneDown={laneDown} toggle={toggle} selectLayer={selectLayer} graph={ui.graph} expanded={ui.expanded} />
             ))}
             {!rows.length && <div className="p-4 text-mute">레이어가 없습니다. HTML 파일을 열거나 [레이어] 메뉴에서 추가하세요.</div>}
@@ -214,15 +246,17 @@ export default function Timeline() {
       </div>
 
       {/* audio track */}
-      <AudioRow project={project} asset={audioAsset} xOf={xOf} pps={pps} laneW={laneW} scrollX={scrollX} />
+      <AudioRow project={project} />
     </div>
   );
 }
 
-function Row({ row, i, project, sel, time, xOf, pps, keyDown, barDown, laneDown, toggle, selectLayer, graph, expanded }) {
+function Row(props) {
+  const { row, i, project, sel, time, xOf, pps, keyDown, barDown, laneDown, toggle, selectLayer, graph, expanded } = props;
   const t = targetOf(project, row.id);
   if (!t) return null;
   const style = { top: i * ROW, height: ROW };
+  if (row.kind === 'param') return <ParamRow {...props} t={t} style={style} />;
   const isSel = sel.layers.includes(row.id);
   const fps = project.fps;
 
@@ -240,8 +274,11 @@ function Row({ row, i, project, sel, time, xOf, pps, keyDown, barDown, laneDown,
             <IconBtn size={13} icon={t.visible === false ? EyeOff : Eye} title="표시" onClick={(e) => { e.stopPropagation(); S().mutate((d) => { const l = draftTarget(d, t.id); l.visible = l.visible === false; }); }} />
             <IconBtn size={13} icon={t.locked ? Lock : Unlock} title="잠금" onClick={(e) => { e.stopPropagation(); S().mutate((d) => { const l = draftTarget(d, t.id); l.locked = !l.locked; }); }} />
           </>}
+          {t.type === 'code' && <Braces size={12} className="shrink-0 text-violet-300" />}
+          {t.type === 'script' && <Cpu size={12} className="shrink-0 text-amber-300" />}
+          {t.type === 'audio' && (t.content.mute ? <VolumeX size={12} className="shrink-0 text-mute" /> : <Music size={12} className="shrink-0 text-emerald-400" />)}
           <Name t={t} isComp={isComp} />
-          {!isComp && <>
+          {!isComp && t.type !== 'audio' && t.type !== 'code' && <>
             <Link2 size={12} className="shrink-0 text-mute" />
             <span onPointerDown={(e) => e.stopPropagation()}><Select className="w-[92px] text-[11px]" value={t.parent || ''} options={parentOpts} onChange={(v) => setParent(t.id, v, getRT())} /></span>
           </>}
@@ -254,6 +291,8 @@ function Row({ row, i, project, sel, time, xOf, pps, keyDown, barDown, laneDown,
               <div className="absolute right-0 top-0 h-full w-1.5 cursor-ew-resize" onPointerDown={(e) => barDown(e, t.id, 'out')} />
             </div>
           )}
+          {t.type === 'audio' && !graph && <AudioWave layer={t} xOf={xOf} pps={pps} />}
+          {t.type === 'code' && !expanded[t.id] && !graph && <CodeTicks t={t} project={project} xOf={xOf} />}
           {!expanded[t.id] && !graph && allKeys.map((k) => <div key={k.id} className="pointer-events-none absolute top-[9px] h-1 w-1 rounded-full bg-key/70" style={{ left: xOf(k.t) - 2 }} />)}
         </div>
       </div>
@@ -325,56 +364,135 @@ function Name({ t, isComp }) {
   return <span className="min-w-0 flex-1 truncate" title={t.selector || t.name} onDoubleClick={() => setEdit(true)}>{isComp ? 'Composition (Adjustment)' : t.name}</span>;
 }
 
-function AudioRow({ project, asset, xOf, pps, laneW, scrollX }) {
+function AudioRow({ project }) {
+  const au = project.audio, l = activeAudio();
+  return (
+    <div className="flex h-[28px] shrink-0 items-center gap-1.5 border-t border-line bg-panel2/50 px-2 text-[11px]">
+      <Music size={13} className="text-emerald-400" />
+      <span className="max-w-[220px] truncate">{l ? l.name : <span className="text-mute">오디오 레이어 없음 — 오디오 파일을 끌어다 놓으세요</span>}</span>
+      {l && <>
+        <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" onClick={runBeatDetection}>비트 감지</button>
+        {au.bpm ? <span className="num text-mute">{au.bpm}BPM · {au.beats.length}</span> : null}
+        <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" title="선택 레이어에 비트마다 스케일 펄스" onClick={() => pulseOnBeats('scale', 12)}>펄스</button>
+        <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" title="선택 키프레임을 가장 가까운 비트로" onClick={snapKeysToBeats}>키→비트</button>
+        <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" title="선택한 속성을 오디오 진폭으로 키프레임화" onClick={() => { const r = prompt('진폭 0 → 값, 진폭 1 → 값 (예: 100,140)', '100,140'); if (r) { const [a, b] = r.split(',').map(Number); audioToKeys(a, b); } }}>오디오→키</button>
+        {au.beats?.length > 0 && <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" onClick={() => S().mutate((d) => { d.audio.beats = []; d.audio.bpm = 0; })}>비트 지우기</button>}
+      </>}
+    </div>
+  );
+}
+
+/** Waveform drawn inside an audio layer's bar. */
+function AudioWave({ layer, xOf, pps }) {
   const ref = useRef(null);
   const [ready, setReady] = useState(0);
-  const au = project.audio;
-  useEffect(() => { if (asset && !bufferOf(asset.id)) decode(asset).then(() => setReady((r) => r + 1)).catch(() => {}); }, [asset]);
+  const key = audioKey(layer);
+  useEffect(() => { if (key && !bufferOf(key.id)) decode(key).then(() => setReady((r) => r + 1)).catch(() => {}); }, [key?.id]); // eslint-disable-line
+  const buf = key && bufferOf(key.id);
+  const x0 = xOf((layer.inPoint || 0) - (layer.content.trim || 0)), clipL = xOf(layer.inPoint || 0), clipR = xOf(layer.outPoint);
+  const w = buf ? buf.duration * pps : 0;
   useEffect(() => {
-    const c = ref.current; if (!c) return;
-    const dpr = devicePixelRatio || 1, w = laneW, h = 44;
-    c.width = w * dpr; c.height = h * dpr; c.style.width = w + 'px'; c.style.height = h + 'px';
-    const g = c.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
-    const buf = asset && bufferOf(asset.id);
-    if (buf) {
-      const x0 = xOf(au.offset || 0), bw = buf.duration * pps, n = Math.max(1, Math.floor(bw));
-      const pk = peaks(buf, Math.min(n, 20000));
-      g.fillStyle = '#3fb98a';
-      for (let i = 0; i < pk.length / 2; i++) {
-        const x = x0 + (i / (pk.length / 2)) * bw; if (x < -2 || x > w) continue;
-        const lo = pk[i * 2], hi = pk[i * 2 + 1];
-        g.fillRect(x, h / 2 - hi * (h / 2 - 2), Math.max(1, bw / (pk.length / 2)), Math.max(1, (hi - lo) * (h / 2 - 2)));
-      }
+    const c = ref.current; if (!c || !buf) return;
+    const L = Math.max(clipL, 0), R = Math.min(clipR, x0 + w, 4000), W = Math.max(1, R - L), H = ROW - 4, dpr = devicePixelRatio || 1;
+    c.width = W * dpr; c.height = H * dpr; c.style.width = W + 'px'; c.style.height = H + 'px'; c.style.left = L + 'px';
+    const g = c.getContext('2d'); g.scale(dpr, dpr); g.fillStyle = layer.content.mute ? '#6b7280' : '#5eead4';
+    const pk = peaks(buf, Math.max(1, Math.min(20000, Math.floor(w))));
+    const n = pk.length / 2, vol = Math.min(1.5, layer.content.volume ?? 1);
+    for (let i = 0; i < n; i++) {
+      const x = x0 + (i / n) * w - L; if (x < 0 || x > W) continue;
+      const hi = pk[i * 2 + 1] * vol, lo = pk[i * 2] * vol;
+      g.fillRect(x, H / 2 - hi * (H / 2), Math.max(1, w / n), Math.max(1, (hi - lo) * (H / 2)));
     }
-    g.fillStyle = '#ff6fb5';
-    for (const b of au.beats || []) { const x = xOf(b); if (x >= 0 && x <= w) g.fillRect(x, 0, 1, h); }
-  }, [asset, ready, pps, scrollX, laneW, au.offset, au.beats]); // eslint-disable-line
+  }, [buf, ready, x0, w, clipL, clipR, layer.content.mute, layer.content.volume]);
+  if (!buf) return null;
+  return <canvas ref={ref} className="pointer-events-none absolute top-[2px] opacity-80" />;
+}
 
-  const dragOffset = (e) => {
-    const x0 = e.clientX, o0 = au.offset || 0;
-    const move = (ev) => S().mutate((d) => { d.audio.offset = +(o0 + (ev.clientX - x0) / pps).toFixed(3); }, { merge: 'audio-offset' });
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+/** Evaluated exports of every code layer's module, read from the running page (for computed values). */
+function useEvaluated(project) {
+  const [evals, setEvals] = useState({});
+  const files = project.layers.filter((l) => l.type === 'code').map((l) => l.content.file).join('|');
+  useEffect(() => onRT(async (rt) => {
+    const ws = S().project.workspace; if (!rt || !ws) return;
+    const win = document.querySelector('iframe[title=composition]')?.contentWindow; if (!win) return;
+    const out = {};
+    for (const f of files.split('|').filter(Boolean)) {
+      try {
+        const mod = await new win.Function('u', 'return import(u)')(location.origin + WS.fileUrl(ws.id, f));
+        out[f] = JSON.parse(JSON.stringify(mod, (k, v) => (typeof v === 'function' ? undefined : v)));
+      } catch (e) { out[f] = {}; }
+    }
+    setEvals(out);
+  }), [files]);
+  return evals;
+}
+
+/** Collapsed code layer: small ticks for every time-like literal. */
+function CodeTicks({ t, project, xOf }) {
+  const text = useStore((s) => fileText(s, t.content.file));
+  const ticks = [];
+  const walk = (p) => { if (isTimeLike(p, project.duration)) ticks.push(p.value); (p.children || []).forEach(walk); };
+  parseParams(text || '').params.forEach(walk);
+  return ticks.map((v, i) => <div key={i} className="pointer-events-none absolute top-[8px] h-[6px] w-[2px] rounded bg-violet-300/80" style={{ left: xOf(v) - 1 }} />);
+}
+
+/** One code parameter: inline value editor + timeline marker / span when it is a time. */
+function ParamRow({ row, t, style, project, xOf, pps, laneDown, graph }) {
+  const [ghost, setGhost] = useState(null);
+  const file = t.content.file, fps = project.fps;
+  if (row.error) return <div className="absolute left-0 right-0 flex items-center border-b border-line/30 pl-11 text-[11px] text-red-300" style={style}>구문 오류: {row.error}</div>;
+  const p = row.p, dur = project.duration;
+  const toggleKey = () => S().setUi((u) => ({ expanded: { ...u.expanded, [row.key]: !(u.expanded[row.key] ?? row.depth < 1) } }));
+  const open = row.group && (S().ui.expanded[row.key] ?? row.depth < 1);
+  const timeLeaf = !row.group && !row.computed && isTimeLike(p, dur);
+  const span = row.group && isTimeSpan(p, dur);
+  const numArr = row.group && p.kind === 'array' && p.children.length > 0 && p.children.every((c) => c.kind === 'number' && isTimeLike(c, dur));
+
+  const drag = (e, leaves, mode) => {
+    e.stopPropagation();
+    const x0 = e.clientX, v0 = leaves.map((l) => l.value);
+    const calc = (ev) => { const dt = (ev.clientX - x0) / pps; return v0.map((v) => Math.max(0, Math.round((v + dt) * fps) / fps)); };
+    const move = (ev) => setGhost({ mode, vals: calc(ev) });
+    const up = (ev) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); setGhost(null);
+      const vals = calc(ev); if (vals.every((v, i) => Math.abs(v - v0[i]) < 1e-6)) return;
+      leaves.forEach((l, i) => setCodeParam(file, l.path, +vals[i].toFixed(4), 'mk-' + Date.now() + i));
+    };
     addEventListener('pointermove', move); addEventListener('pointerup', up);
   };
-  return (
-    <div className="flex h-[46px] shrink-0 border-t border-line bg-panel2/50">
-      <div className="flex shrink-0 flex-col justify-center gap-0.5 border-r border-line px-2" style={{ width: LEFT }}>
-        <div className="flex items-center gap-1.5">
-          <Music size={13} className="text-emerald-400" />
-          <span className="min-w-0 flex-1 truncate">{asset ? asset.name : <span className="text-mute">오디오 없음 — Project 패널에서 오디오를 추가하세요</span>}</span>
-          {asset && <>vol <ScrubNumber value={au.volume ?? 1} step={0.01} min={0} max={2} onChange={(v) => S().mutate((d) => { d.audio.volume = v; }, { merge: 'vol' })} /></>}
+  const Marker = ({ v, leaf, ro, i }) => (
+    <div onPointerDown={ro ? undefined : (e) => drag(e, [leaf], i)} title={`${row.label}${leaf ? '' : ''} = ${(+v).toFixed(3)}s${ro ? ' (코드에서 계산됨 — 코드 탭에서 수정)' : ' · 드래그해서 시간 변경'}`}
+      className={cx('absolute top-1/2 h-[12px] w-[6px] -translate-x-1/2 -translate-y-1/2 rounded-sm border', ro ? 'border-black/40 bg-violet-300/40' : 'cursor-ew-resize border-black/60 bg-violet-400')}
+      style={{ left: xOf(v) }} />
+  );
+  let lane = null;
+  if (!graph) {
+    if (timeLeaf) lane = <Marker v={ghost ? ghost.vals[0] : p.value} leaf={p} i={0} />;
+    else if (span) {
+      const [a, b] = ghost ? ghost.vals : p.children.map((c) => c.value);
+      lane = (
+        <div className="absolute top-[5px] h-[12px] cursor-grab rounded-sm bg-violet-500/40 outline outline-1 outline-violet-400" style={{ left: xOf(a), width: Math.max(2, (b - a) * pps) }} onPointerDown={(e) => drag(e, p.children, 'span')}>
+          <div className="absolute left-0 top-0 h-full w-1.5 cursor-ew-resize bg-violet-300" onPointerDown={(e) => drag(e, [p.children[0]], 'a')} />
+          <div className="absolute right-0 top-0 h-full w-1.5 cursor-ew-resize bg-violet-300" onPointerDown={(e) => drag(e, [p.children[1]], 'b')} />
+          <span className="pointer-events-none absolute left-2 top-[-1px] text-[10px] text-violet-100">{row.label}</span>
         </div>
-        {asset && <div className="flex items-center gap-1 text-[11px]">
-          <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" onClick={runBeatDetection}>비트 감지</button>
-          {au.bpm ? <span className="num text-mute">{au.bpm}BPM · {au.beats.length}</span> : null}
-          <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" title="선택 레이어에 비트마다 스케일 펄스" onClick={() => pulseOnBeats('scale', 12)}>펄스</button>
-          <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" title="선택 키프레임을 가장 가까운 비트로" onClick={snapKeysToBeats}>키→비트</button>
-          <button className="rounded bg-white/5 px-1.5 hover:bg-white/10" title="선택한 속성을 오디오 진폭으로 키프레임화" onClick={() => { const r = prompt('진폭 0 → 값, 진폭 1 → 값 (예: 100,140)', '100,140'); if (r) { const [a, b] = r.split(',').map(Number); audioToKeys(a, b); } }}>오디오→키</button>
-        </div>}
+      );
+    } else if (numArr && !open) lane = p.children.map((c, i) => <Marker key={i} v={c.value} leaf={c} i={i} />);
+    else if (row.computed && row.time) lane = row.computed.map((v, i) => <Marker key={i} v={v} ro i={i} />);
+  }
+  const edit = (v) => setCodeParam(file, p.path, v);
+  return (
+    <div className="absolute left-0 right-0 flex border-b border-line/30" style={style}>
+      <div className="flex shrink-0 items-center gap-1 border-r border-line pr-1" style={{ width: LEFT, paddingLeft: 30 + row.depth * 12 }}>
+        {row.group ? <button className="w-3 text-mute" onClick={toggleKey}><ChevronRight size={11} className={cx(open && 'rotate-90')} /></button> : <span className="w-3" />}
+        <span className={cx('min-w-0 flex-1 truncate font-mono text-[11px]', row.computed != null ? 'text-mute' : 'text-violet-200')} title={p.path.join('.')}>{row.label}</span>
+        {row.computed != null && <span className="text-[10px] text-mute">{Array.isArray(row.computed) ? `${row.computed.length}개 · 계산됨` : String(row.computed)}</span>}
+        {!row.group && row.computed == null && p.kind === 'number' && <ScrubNumber value={p.value} step={timeLeaf ? 1 / fps : Math.abs(p.value) >= 10 ? 1 : 0.01} onChange={edit} unit={timeLeaf ? 's' : ''} decimals={timeLeaf || Math.abs(p.value) < 10 ? 3 : 1} />}
+        {!row.group && row.computed == null && p.kind === 'string' && <input key={p.value} defaultValue={p.value} className="w-[150px] rounded border border-line bg-app px-1 text-[11px] outline-none focus:border-acc" onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); }} onBlur={(e) => e.target.value !== p.value && edit(e.target.value)} />}
+        {!row.group && row.computed == null && p.kind === 'bool' && <input type="checkbox" checked={p.value} onChange={(e) => edit(e.target.checked)} />}
+        {row.group && <span className="text-[10px] text-mute">{p.kind === 'array' ? `[${p.children.length}]` : '{…}'}</span>}
       </div>
-      <div className="relative min-w-0 flex-1 cursor-grab overflow-hidden" onPointerDown={asset ? dragOffset : undefined} title="드래그해서 오디오 시작점 이동">
-        <canvas ref={ref} className="absolute left-0 top-0" />
-      </div>
+      <div className="relative min-w-0 flex-1 overflow-hidden" onPointerDown={laneDown}>{lane}</div>
     </div>
   );
 }

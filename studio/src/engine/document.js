@@ -20,8 +20,9 @@ export function runtimeProject(project, assets) {
   const a = {};
   for (const [id, x] of Object.entries(assets || {})) a[id] = { url: x.url, kind: x.kind };
   const audio = project.audio?.assetId && assets[project.audio.assetId] ? { ...project.audio, url: assets[project.audio.assetId].url } : null;
-  const { source, ...rest } = project;
-  return { ...rest, assets: a, audio };
+  const { source, files, ...rest } = project;
+  const layers = (rest.layers || []).map((l) => (l.type === 'audio' && l.content.assetId && assets?.[l.content.assetId] ? { ...l, content: { ...l.content, url: assets[l.content.assetId].url } } : l));
+  return { ...rest, layers, assets: a, audio };
 }
 
 /**
@@ -65,11 +66,11 @@ export function guessSize(source) {
 }
 
 /** Run the runtime's analysis in an off-screen frame. */
-export function analyzeSource(source, { width, height, fps, maxDuration = 30 }) {
+export function analyzeSource(source, { width, height, fps, maxDuration = 30, url }) {
   return new Promise((resolve, reject) => {
     const f = document.createElement('iframe');
     f.style.cssText = `position:fixed;left:-20000px;top:0;width:${width}px;height:${height}px;border:0;visibility:hidden`;
-    const timer = setTimeout(() => { f.remove(); reject(new Error('Analysis timed out')); }, 60000);
+    const timer = setTimeout(() => { f.remove(); reject(new Error('Analysis timed out')); }, 120000);
     f.onload = async () => {
       try {
         const rt = f.contentWindow.MotionRuntime;
@@ -77,7 +78,7 @@ export function analyzeSource(source, { width, height, fps, maxDuration = 30 }) 
         resolve(res);
       } catch (e) { reject(e); } finally { clearTimeout(timer); setTimeout(() => f.remove(), 0); }
     };
-    f.srcdoc = withRuntime(preferLocalVendors(source));
+    if (url) f.src = url; else f.srcdoc = withRuntime(preferLocalVendors(source));
     document.body.appendChild(f);
   });
 }

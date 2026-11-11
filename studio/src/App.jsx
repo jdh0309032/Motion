@@ -6,9 +6,13 @@ import Timeline from './components/Timeline.jsx';
 import Inspector, { CompFields } from './components/Inspector.jsx';
 import SidePanel from './components/SidePanel.jsx';
 import RenderDialog from './components/RenderDialog.jsx';
+import CodeEditor from './components/CodeEditor.jsx';
+import OpenFolder from './components/OpenFolder.jsx';
+import { readDroppedEntry } from './engine/workspace.js';
 import { Modal, Btn } from './components/ui.jsx';
 import { importFiles, saveProject, deleteSelection, duplicateLayers, copyKeys, pasteKeys, setEaseSelected, addLayer, importHtmlText, moveLayer } from './engine/actions.js';
-import { playAudio, stopAudio } from './engine/audio.js';
+import { playAudio, stopAudio, decode } from './engine/audio.js';
+import { audioKey, uploadAndOpen } from './engine/actions.js';
 import { EASE_PRESETS } from './engine/bezier.js';
 import { Loader2 } from 'lucide-react';
 
@@ -19,16 +23,17 @@ function usePlayback() {
   useEffect(() => {
     if (!playing) { stopAudio(); return; }
     let raf, t0 = performance.now(), from = S().time;
-    const { project, assets } = S();
+    const { project } = S();
     if (from >= project.duration - 1e-3) from = 0;
-    const audio = assets[project.audio.assetId];
-    playAudio(audio, from, project.audio.offset || 0, project.audio.volume ?? 1);
+    const tracks = project.layers.filter((l) => l.type === 'audio' && !l.content.mute && l.visible !== false)
+      .map((l) => ({ key: audioKey(l), at: l.inPoint || 0, trim: l.content.trim || 0, volume: l.content.volume ?? 1 })).filter((t) => t.key);
+    Promise.all(tracks.map((t) => decode(t.key).catch(() => null))).then(() => { if (S().playing) playAudio(tracks, S().time); });
     const tick = (now) => {
       const P = S().project;
       let t = from + (now - t0) / 1000;
       if (t >= P.duration) {
         if (S().ui.loop === false) { S().setTime(P.duration); S().setPlaying(false); return; }
-        from = 0; t0 = now; t = 0; playAudio(audio, 0, P.audio.offset || 0, P.audio.volume ?? 1);
+        from = 0; t0 = now; t = 0; playAudio(tracks, 0);
       }
       S().setTime(Math.round(t * P.fps) / P.fps);
       raf = requestAnimationFrame(tick);
@@ -48,6 +53,7 @@ function useShortcuts(open) {
       hit(c && e.key.toLowerCase() === 'z' && !e.shiftKey, () => st.undo()) ||
       hit(c && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey)), () => st.redo()) ||
       hit(c && e.key.toLowerCase() === 's', saveProject) ||
+      hit(c && e.shiftKey && e.key.toLowerCase() === 'o', () => open.folder()) ||
       hit(c && e.key.toLowerCase() === 'o', () => open.html()) ||
       hit(c && e.key.toLowerCase() === 'm', () => open.render()) ||
       hit(c && e.key.toLowerCase() === 'k', () => open.comp()) ||
@@ -81,21 +87,29 @@ function Splitter({ onDrag, vertical }) {
 }
 
 export default function App() {
-  const [render, setRender] = useState(false), [comp, setComp] = useState(false);
+  const [render, setRender] = useState(false), [comp, setComp] = useState(false), [folder, setFolder] = useState(false);
+  const [center, setCenter] = useState('comp');
+  const isWs = useStore((s) => !!s.project.workspace);
   const [tlH, setTlH] = useState(330), [leftW, setLeftW] = useState(250), [rightW, setRightW] = useState(330);
   const busy = useStore((s) => s.busy), status = useStore((s) => s.status), hasLayers = useStore((s) => s.project.layers.length > 0);
   const [drag, setDrag] = useState(false);
   const openRef = useRef({});
   openRef.current = {
     html: () => { const i = document.createElement('input'); i.type = 'file'; i.accept = '.html,.htm'; i.onchange = () => importFiles([...i.files]); i.click(); },
-    render: () => setRender(true), comp: () => setComp(true),
+    render: () => setRender(true), comp: () => setComp(true), folder: () => setFolder(true),
   };
   usePlayback();
   useShortcuts(openRef.current);
   useEffect(() => {
     const over = (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDrag(true); } };
     const leave = (e) => { if (!e.relatedTarget) setDrag(false); };
-    const drop = (e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDrag(false); importFiles([...e.dataTransfer.files]); };
+    const drop = async (e) => {
+      if (!e.dataTransfer.files.length) return; e.preventDefault(); setDrag(false);
+      const entries = [...e.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+      const dir = entries.find((x) => x.isDirectory);
+      if (dir) { const files = (await readDroppedEntry(dir)).map((f) => ({ ...f, path: f.path.split('/').slice(1).join('/') })); return uploadAndOpen(dir.name, files); }
+      importFiles([...e.dataTransfer.files]);
+    };
     addEventListener('dragover', over); addEventListener('dragleave', leave); addEventListener('drop', drop);
     return () => { removeEventListener('dragover', over); removeEventListener('dragleave', leave); removeEventListener('drop', drop); };
   }, []);
@@ -103,18 +117,24 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <MenuBar onRender={() => setRender(true)} onComp={() => setComp(true)} />
+      <MenuBar onRender={() => setRender(true)} onComp={() => setComp(true)} onFolder={() => setFolder(true)} />
       <div className="flex min-h-0 flex-1">
         <div className="shrink-0 border-r border-line bg-panel" style={{ width: leftW }}><SidePanel /></div>
         <Splitter vertical onDrag={(e) => setLeftW(Math.max(180, Math.min(500, e.clientX)))} />
-        <div className="relative min-w-0 flex-1">
-          <Viewer />
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <div className="flex h-7 shrink-0 items-end gap-0.5 border-b border-line bg-panel px-1">
+            {[['comp', 'Composition'], ['code', 'Code']].map(([k, n]) => (
+              <button key={k} onClick={() => setCenter(k)} className={'rounded-t px-3 py-1 text-[12px] ' + (center === k ? 'bg-app text-fg' : 'text-mute hover:text-fg')}>{n}{k === 'code' && !isWs ? ' (폴더 프로젝트)' : ''}</button>
+            ))}
+          </div>
+          <div className={center === 'comp' ? 'relative min-h-0 flex-1' : 'hidden'}><Viewer /></div>
+          {center === 'code' && <div className="min-h-0 flex-1"><CodeEditor /></div>}
           {!hasLayers && !busy && (
             <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center">
               <div className="pointer-events-auto rounded-lg border border-line bg-panel/95 px-4 py-3 text-center shadow-xl">
-                <div className="mb-1 font-semibold">Claude Code로 만든 HTML 모션그래픽을 끌어다 놓으세요</div>
-                <div className="mb-2 text-mute">CSS · Web Animations · GSAP 애니메이션이 레이어와 키프레임으로 변환됩니다</div>
-                <div className="flex justify-center gap-2"><Btn primary onClick={() => openRef.current.html()}>HTML 열기</Btn><Btn onClick={loadDemo}>데모 열기</Btn></div>
+                <div className="mb-1 font-semibold">Claude Code로 만든 모션그래픽(HTML 파일 또는 프로젝트 폴더)을 끌어다 놓으세요</div>
+                <div className="mb-2 text-mute">CSS · GSAP → 키프레임, Canvas/WebGL → 스크립트 레이어, JS 상수 → 코드 레이어, 오디오 → 오디오 레이어</div>
+                <div className="flex justify-center gap-2"><Btn primary onClick={() => openRef.current.html()}>HTML 열기</Btn><Btn primary onClick={() => setFolder(true)}>폴더 열기</Btn><Btn onClick={loadDemo}>데모 열기</Btn></div>
               </div>
             </div>
           )}
@@ -126,6 +146,7 @@ export default function App() {
       <div className="shrink-0" style={{ height: tlH }}><Timeline /></div>
 
       {render && <RenderDialog onClose={() => setRender(false)} />}
+      {folder && <OpenFolder onClose={() => setFolder(false)} />}
       {comp && <Modal title="Composition Settings" onClose={() => setComp(false)}><CompFields /><div className="mt-3 flex justify-end"><Btn primary onClick={() => setComp(false)}>확인</Btn></div></Modal>}
       {busy && <div className="fixed inset-0 z-50 grid place-items-center bg-black/50"><div className="flex items-center gap-3 rounded-lg border border-line bg-panel px-5 py-4"><Loader2 className="animate-spin text-acc" /> {busy}</div></div>}
       {drag && <div className="pointer-events-none fixed inset-0 z-40 border-4 border-dashed border-acc bg-acc/10" />}

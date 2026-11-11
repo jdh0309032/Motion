@@ -4,12 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { renderVideo, FORMATS } from './render.js';
 import { localVendorFile } from './vendors.js';
+import { workspaceMiddleware, wsRoot } from './workspace.js';
 
 export default function motionRender() {
   const jobs = new Map();
   return {
     name: 'motion-render',
     configureServer(server) {
+      server.middlewares.use(workspaceMiddleware());
       // /vendor?u=<cdn url> → local copy (the editor rewrites CDN script tags inside the preview frame)
       server.middlewares.use('/vendor', (req, res, next) => {
         const u = new URL(req.url, 'http://x').searchParams.get('u'), f = u && localVendorFile(u);
@@ -31,7 +33,8 @@ export default function motionRender() {
               const out = path.join(os.tmpdir(), `motion-${jid}.${ext}`);
               const job = { id: jid, frame: 0, total: 0, done: false, error: null, out, name: (o.name || 'render') + '.' + ext, ac, started: Date.now() };
               jobs.set(jid, job);
-              renderVideo({ ...o, out, signal: ac.signal, onProgress: (f, n) => { job.frame = f; job.total = n; } })
+              const src = o.ws ? { root: wsRoot(o.ws), entry: o.entry, project: o.project, html: undefined } : {};
+              renderVideo({ ...o, ...src, out, signal: ac.signal, log: (m) => console.warn('[render]', m), onProgress: (f, n) => { job.frame = f; job.total = n; } })
                 .then(() => (job.done = true)).catch((e) => (job.error = e.message));
               send(200, { id: jid });
             } catch (e) { send(400, { error: e.message }); }

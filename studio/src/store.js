@@ -7,6 +7,7 @@ let lastMerge = { key: null, at: 0 };
 export const useStore = create((set, get) => ({
   project: createProject(),
   assets: {},                 // id → { id, name, kind: image|audio, url (data URL), meta }
+  fileCache: {},              // workspace file texts as loaded from disk (project.files holds edited versions)
   past: [], future: [],
   time: 0, playing: false,
   sel: { layers: [], keys: [], path: null },   // keys: "target|path|keyId"; path: {target, path}
@@ -35,9 +36,11 @@ export const useStore = create((set, get) => ({
     const { past, project, future } = get(); if (!future.length) return;
     set((s) => ({ project: future[0], future: future.slice(1), past: [...past, project], rev: s.rev + 1, structureRev: s.structureRev + 1 }));
   },
-  loadProject(project, assets = {}) {
-    set((s) => ({ project, assets, past: [], future: [], time: 0, playing: false, sel: { layers: [], keys: [], path: null }, rev: s.rev + 1, structureRev: s.structureRev + 1, sourceRev: (s.sourceRev || 0) + 1 }));
+  loadProject(project, assets = {}, fileCache = {}) {
+    project.files ||= {};
+    set((s) => ({ project, assets, fileCache, past: [], future: [], time: 0, playing: false, sel: { layers: [], keys: [], path: null }, rev: s.rev + 1, structureRev: s.structureRev + 1, sourceRev: (s.sourceRev || 0) + 1 }));
   },
+  cacheFile(path, text) { set((s) => ({ fileCache: { ...s.fileCache, [path]: text } })); },
   addAsset(a) { set((s) => ({ assets: { ...s.assets, [a.id]: a } })); },
   removeAsset(id) { set((s) => { const a = { ...s.assets }; delete a[id]; return { assets: a }; }); },
   setTime(t) { const { project } = get(); set({ time: Math.max(0, Math.min(project.duration, t)) }); },
@@ -48,6 +51,8 @@ export const useStore = create((set, get) => ({
   setBusy(busy) { set({ busy }); },
 }));
 
+/** Current text of a workspace file (edited version first). */
+export const fileText = (s, path) => s.project.files?.[path] ?? s.fileCache[path];
 export const targetOf = (project, id) => (id === 'comp' ? { ...project.comp, id: 'comp', type: 'comp', name: 'Composition', props: {} } : project.layers.find((l) => l.id === id));
 /** Mutable target inside a draft project. */
 export const draftTarget = (draft, id) => (id === 'comp' ? draft.comp : draft.layers.find((l) => l.id === id));

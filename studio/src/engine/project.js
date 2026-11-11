@@ -41,6 +41,17 @@ export const LAYER_TYPES = {
     { key: 'height', label: 'Height', min: 1, max: 8000, step: 1 },
   ] },
   null: { label: 'Null Object', icon: 'Crosshair', content: {}, params: [] },
+  // canvas / WebGL drawn by the page's own code — driven through window.renderAt(t) (or the virtual clock)
+  script: { label: 'Script (Canvas/WebGL)', icon: 'Cpu', content: { speed: 100 }, params: [
+    { key: 'speed', label: 'Time Stretch', min: 1, max: 1000, step: 1, unit: '%', noAnim: true },
+  ] },
+  audio: { label: 'Audio', icon: 'Music', noTransform: true, content: { src: null, assetId: null, volume: 1, mute: false, trim: 0 }, params: [
+    { key: 'volume', label: 'Volume', min: 0, max: 2, step: 0.01, noAnim: true },
+    { key: 'trim', label: 'Start Trim', min: 0, max: 3600, step: 0.01, unit: 's', noAnim: true },
+    { key: 'mute', label: 'Mute', type: 'bool' },
+  ] },
+  // literal values of a JS module (export const …) — edited in place in the source code
+  code: { label: 'Code Parameters', icon: 'Braces', noTransform: true, content: { file: null }, params: [] },
 };
 
 // ───────── effects (all rendered by the runtime; every numeric param is keyframeable) ─────────
@@ -163,8 +174,9 @@ export function addKeyHere(target, path, t, fps) {
 /** All animatable paths of a target, grouped for the timeline. */
 export function propertyGroups(target, isComp = false) {
   const g = [];
+  if (LAYER_TYPES[target.type]?.noTransform) return g;
   if (!isComp) g.push({ name: 'Transform', paths: TRANSFORM.filter((p) => p.key !== 'scaleX' && p.key !== 'scaleY' || target.tracks?.[p.key] || target.props[p.key] !== 100).map((p) => p.key) });
-  const cp = (LAYER_TYPES[target.type]?.params || []).filter((p) => !p.type).map((p) => 'c.' + p.key);
+  const cp = (LAYER_TYPES[target.type]?.params || []).filter((p) => !p.type && !p.noAnim).map((p) => 'c.' + p.key);
   if (cp.length) g.push({ name: LAYER_TYPES[target.type].label, paths: cp });
   for (const e of target.effects || []) g.push({ name: EFFECTS[e.type].label, fx: e.id, paths: EFFECTS[e.type].params.filter((p) => !p.type).map((p) => `fx.${e.id}.${p.key}`) });
   const css = Object.keys(target.tracks || {}).filter((p) => p.startsWith('css.'));
