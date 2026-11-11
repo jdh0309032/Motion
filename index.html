@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Motion Editor</title>
+<style>
+  :root{--bg:#16171d;--panel:#1f2129;--line:#30333f;--fg:#e6e7ee;--mute:#9095a8;--acc:#7c8cff;--danger:#ff6b6b}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,-apple-system,"Noto Sans KR",sans-serif}
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{background:#2a2d38;border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+  button:hover{border-color:var(--acc)}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  input,select{background:#14151a;border:1px solid var(--line);border-radius:5px;padding:4px 6px;min-width:0}
+  input[type=color]{padding:0;width:32px;height:26px}
+  .app{display:grid;grid-template-rows:auto 1fr auto;height:100%}
+  header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+  header h1{font-size:14px;margin:0 8px 0 0}
+  header .sp{flex:1}
+  main{display:grid;grid-template-columns:1fr 340px;min-height:0}
+  .preview{position:relative;display:grid;place-items:center;padding:16px;min-height:0;overflow:hidden}
+  .frameWrap{position:relative;width:100%;height:100%;background:#000;border-radius:8px;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
+  iframe{border:0;width:100%;height:100%;display:block;background:#fff}
+  .drop{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--mute);pointer-events:none}
+  .drop.hide{display:none}
+  .frameWrap.dragging{box-shadow:0 0 0 3px var(--acc)}
+  aside{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+  .tabs{display:flex;border-bottom:1px solid var(--line)}
+  .tabs button{flex:1;border:0;border-radius:0;background:none;padding:9px;color:var(--mute)}
+  .tabs button.on{color:var(--fg);box-shadow:inset 0 -2px var(--acc)}
+  .pane{display:none;overflow:auto;padding:12px;flex:1;min-height:0}
+  .pane.on{display:block}
+  .sec{margin-bottom:16px}
+  .sec h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);margin:0 0 8px}
+  .row{display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px;align-items:center;margin-bottom:6px}
+  .row label{color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .pair{display:flex;gap:6px;min-width:0}
+  .row .pair input:not([type=color]){flex:1;width:0}
+  .card{border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;cursor:pointer}
+  .card.sel{border-color:var(--acc)}
+  .card .t{font-weight:600}.card .s{color:var(--mute);font-size:11px;word-break:break-all}
+  .empty{color:var(--mute)}
+  textarea.code{width:100%;height:calc(100% - 40px);min-height:300px;background:#0f1014;border:1px solid var(--line);border-radius:6px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace;resize:none;white-space:pre;tab-size:2}
+  footer{display:flex;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);background:var(--panel)}
+  footer input[type=range]{flex:1}
+  .time{font-variant-numeric:tabular-nums;color:var(--mute);min-width:110px;text-align:right}
+  .hl{outline:2px dashed var(--acc)!important;outline-offset:2px}
+  .log{font-size:11px;color:var(--mute);white-space:pre-wrap}
+  .x{color:var(--danger);border:0;background:none;padding:0 4px}
+  @media (max-width:800px){main{grid-template-columns:1fr;grid-template-rows:50vh 1fr}aside{border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>🎬 Motion Editor</h1>
+    <button id="openBtn">열기</button>
+    <input id="file" type="file" accept=".html,.htm,.svg" hidden>
+    <button id="demoBtn">데모</button>
+    <button id="pickBtn" title="미리보기에서 요소를 클릭해 선택">🎯 요소 선택</button>
+    <span class="sp"></span>
+    <label><input id="bgChk" type="checkbox"> 체커 배경</label>
+    <select id="sizeSel" title="미리보기 크기">
+      <option value="fill">맞춤</option><option value="1920x1080">1920×1080</option>
+      <option value="1080x1080">1080×1080</option><option value="1080x1920">1080×1920</option>
+    </select>
+    <button id="resetBtn">수정 초기화</button>
+    <button id="exportBtn" class="primary">HTML 내보내기</button>
+  </header>
+
+  <main>
+    <section class="preview">
+      <div class="frameWrap" id="wrap">
+        <iframe id="frame" sandbox="allow-scripts allow-same-origin"></iframe>
+        <div class="drop" id="drop">Claude Code로 만든 모션그래픽 HTML 파일을<br>여기에 끌어다 놓거나 [열기]를 누르세요</div>
+      </div>
+    </section>
+    <aside>
+      <div class="tabs">
+        <button data-tab="vars" class="on">색상·변수</button>
+        <button data-tab="anims">애니메이션</button>
+        <button data-tab="el">요소</button>
+        <button data-tab="code">코드</button>
+      </div>
+      <div class="pane on" id="tab-vars"></div>
+      <div class="pane" id="tab-anims"></div>
+      <div class="pane" id="tab-el"><p class="empty">🎯 요소 선택을 누르고 미리보기에서 요소를 클릭하세요.</p></div>
+      <div class="pane" id="tab-code">
+        <div style="display:flex;gap:6px;margin-bottom:8px"><button id="applyCode" class="primary">코드 적용</button><span class="empty" style="align-self:center">원본 소스 (수정사항은 내보낼 때 합쳐짐)</span></div>
+        <textarea class="code" id="code" spellcheck="false"></textarea>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <button id="playBtn">⏸</button>
+    <button id="restartBtn" title="처음부터">⏮</button>
+    <input id="scrub" type="range" min="0" max="5000" value="0" step="10">
+    <label>길이 <input id="lenInp" type="number" value="5" min="0.5" step="0.5" style="width:56px">s</label>
+    <label>속도 <select id="rateSel"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option></select></label>
+    <span class="time" id="time">0.00s</span>
+  </footer>
+</div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const frame = $('#frame');
+const MARK = 'motion-editor-edits';
+
+// ---- state ----
+let source = '';           // original HTML (without our edits block)
+let fileName = 'motion.html';
+// edits: { vars:{name:value}, styles:{selector:{prop:value}}, texts:{selector:text}, anims:{selector:{duration,delay,easing,iterations}} }
+let edits = blank();
+let playing = true, rate = 1, picking = false, selected = null;
+let rafStart = 0, rafOffset = 0;
+
+function blank(){ return {vars:{}, styles:{}, texts:{}, anims:{}}; }
+const doc = () => frame.contentDocument;
+const win = () => frame.contentWindow;
+
+// ---- loading ----
+function stripEdits(html){
+  const m = html.match(/<!--motion-edits:([\s\S]*?)-->/);
+  let e = blank();
+  if (m) { try { e = Object.assign(blank(), JSON.parse(decodeURIComponent(m[1]))); } catch {} }
+  html = html.replace(/<!--motion-edits:[\s\S]*?-->/,'')
+             .replace(new RegExp(`<style id="${MARK}">[\\s\\S]*?</style>`),'')
+             .replace(new RegExp(`<script id="${MARK}-js">[\\s\\S]*?<\/script>`),'');
+  return [html, e];
+}
+function load(html, name){
+  [source, edits] = stripEdits(html);
+  if (name) fileName = name;
+  $('#code').value = source;
+  $('#drop').classList.add('hide');
+  render();
+}
+function render(){
+  selected = null;
+  frame.onload = onFrameLoad;
+  frame.srcdoc = build(true);
+}
+function onFrameLoad(){
+  const d = doc(); if (!d) return;
+  const st = d.createElement('style');
+  st.textContent = '.hl{outline:2px dashed #7c8cff!important;outline-offset:2px}';
+  d.head && d.head.appendChild(st);
+  d.addEventListener('click', onPick, true);
+  d.addEventListener('mouseover', e => { if (picking) e.target.classList.add('hl'); }, true);
+  d.addEventListener('mouseout',  e => { if (picking && e.target !== selected) e.target.classList.remove('hl'); }, true);
+  rafOffset = 0; rafStart = performance.now();
+  setTimeout(() => { buildVars(); buildAnims(); if (!playing) seek(+$('#scrub').value); }, 60);
+}
+
+// ---- build final HTML (source + edits) ----
+function editsCSS(){
+  let css = '';
+  const v = Object.entries(edits.vars);
+  if (v.length) css += `:root{${v.map(([k,x])=>`${k}:${x}!important`).join(';')}}\n`;
+  for (const [sel, props] of Object.entries(edits.styles)) {
+    const p = Object.entries(props).filter(([,x])=>x!=='');
+    if (p.length) css += `${sel}{${p.map(([k,x])=>`${k}:${x}!important`).join(';')}}\n`;
+  }
+  for (const [sel, a] of Object.entries(edits.anims)) {
+    const p = [];
+    if (a.duration!=null) p.push(`animation-duration:${a.duration}ms`);
+    if (a.delay!=null) p.push(`animation-delay:${a.delay}ms`);
+    if (a.easing) p.push(`animation-timing-function:${a.easing}`);
+    if (a.iterations!=null) p.push(`animation-iteration-count:${a.iterations===Infinity||a.iterations==='infinite'?'infinite':a.iterations}`);
+    if (p.length) css += `${sel}{${p.map(x=>x+'!important').join(';')}}\n`;
+  }
+  return css;
+}
+function build(){
+  const css = editsCSS();
+  const texts = Object.keys(edits.texts).length
+    ? `<script id="${MARK}-js">(function(){var t=${JSON.stringify(edits.texts).replace(/</g,'\\u003c')};function a(){for(var s in t){var e=document.querySelector(s);if(e)e.textContent=t[s];}}if(document.readyState!=='loading')a();else document.addEventListener('DOMContentLoaded',a);})();<\/script>` : '';
+  const block = `<!--motion-edits:${encodeURIComponent(JSON.stringify(edits))}-->` +
+                (css ? `<style id="${MARK}">\n${css}</style>` : '') + texts;
+  if (/<\/body>/i.test(source)) return source.replace(/<\/body>(?![\s\S]*<\/body>)/i, block + '</body>');
+  return source + block;
+}
+
+// ---- CSS variables / colors ----
+function collectVars(){
+  const out = new Map(), d = doc();
+  for (const sheet of d.styleSheets) {
+    if (sheet.ownerNode && sheet.ownerNode.id === MARK) continue;
+    let rules; try { rules = sheet.cssRules; } catch { continue; }
+    for (const r of rules) if (r.style) for (const p of r.style) if (p.startsWith('--')) out.set(p, r.style.getPropertyValue(p).trim());
+  }
+  return out;
+}
+const isColor = v => /^(#[0-9a-f]{3,8}|rgba?\(|hsla?\()/i.test(v.trim());
+function toHex(v){
+  const c = document.createElement('canvas').getContext('2d'); c.fillStyle = '#000'; c.fillStyle = v;
+  return /^#/.test(c.fillStyle) ? c.fillStyle : '#000000';
+}
+function buildVars(){
+  const p = $('#tab-vars'); p.innerHTML = '';
+  const vars = collectVars();
+  const sec = mk('div','sec'); sec.innerHTML = '<h3>CSS 변수 (:root)</h3>'; p.appendChild(sec);
+  if (!vars.size) sec.insertAdjacentHTML('beforeend','<p class="empty">CSS 변수가 없습니다. [요소] 탭에서 개별 요소를 수정하세요.</p>');
+  for (const [name, orig] of vars) {
+    const cur = edits.vars[name] ?? orig;
+    const row = mk('div','row'); row.innerHTML = `<label title="${name}">${name}</label><div class="pair"></div>`;
+    const pair = row.lastChild;
+    const txt = mk('input'); txt.value = cur;
+    const set = v => { edits.vars[name] = v; if (v === orig) delete edits.vars[name]; applyLive(); };
+    if (isColor(orig)) {
+      const col = mk('input'); col.type = 'color'; col.value = toHex(cur);
+      col.oninput = () => { txt.value = col.value; set(col.value); };
+      pair.appendChild(col);
+    }
+    txt.onchange = () => set(txt.value);
+    pair.appendChild(txt); sec.appendChild(row);
+  }
+  // colors used directly in stylesheet
+  const colors = new Set();
+  for (const sheet of doc().styleSheets) { let rs; try{rs=sheet.cssRules}catch{continue}
+    for (const r of rs) if (r.style) for (const pr of r.style) { const v=r.style.getPropertyValue(pr); (v.match(/#[0-9a-f]{3,8}\b/gi)||[]).forEach(c=>colors.add(c.toLowerCase())); } }
+  if (colors.size) {
+    const s2 = mk('div','sec'); s2.innerHTML = '<h3>하드코딩된 색상 (소스 일괄 치환)</h3>'; p.appendChild(s2);
+    for (const c of colors) {
+      const row = mk('div','row'); row.innerHTML = `<label>${c}</label><div class="pair"></div>`;
+      const col = mk('input'); col.type='color'; col.value = toHex(c);
+      col.onchange = () => { source = source.split(new RegExp(c.replace('#','#'),'gi')).join(col.value); $('#code').value = source; render(); };
+      row.lastChild.appendChild(col); s2.appendChild(row);
+    }
+  }
+}
+
+// ---- animations ----
+function selectorFor(el){
+  if (!el || el.nodeType !== 1) return '';
+  if (el.id && el.id !== MARK) return '#' + CSS.escape(el.id);
+  const parts = [];
+  while (el && el.nodeType === 1 && el.tagName !== 'HTML') {
+    if (el.id) { parts.unshift('#' + CSS.escape(el.id)); break; }
+    let s = el.tagName.toLowerCase();
+    const par = el.parentElement;
+    if (par && el.tagName !== 'BODY') {
+      const sib = [...par.children].filter(c => c.tagName === el.tagName);
+      if (sib.length > 1) s += `:nth-of-type(${sib.indexOf(el) + 1})`;
+    }
+    parts.unshift(s); el = par;
+  }
+  return parts.join(' > ');
+}
+function animList(){
+  const d = doc(); if (!d || !d.getAnimations) return [];
+  return d.getAnimations().filter(a => a.effect && a.effect.target);
+}
+function buildAnims(){
+  const p = $('#tab-anims'); p.innerHTML = '';
+  const g = win().gsap;
+  if (g) p.insertAdjacentHTML('beforeend','<p class="empty">GSAP 감지됨 — 타임라인 스크럽 지원. 개별 트윈은 [코드] 탭에서 수정하세요.</p>');
+  const list = animList();
+  if (!list.length && !g) { p.innerHTML = '<p class="empty">감지된 CSS/Web 애니메이션이 없습니다.</p>'; return; }
+  let maxEnd = 0;
+  for (const a of list) {
+    const el = a.effect.target, sel = selectorFor(el), t = a.effect.getTiming();
+    const ed = edits.anims[sel] || {};
+    const end = (t.delay||0) + (typeof t.duration==='number'?t.duration:0) * (t.iterations===Infinity?1:(t.iterations||1));
+    maxEnd = Math.max(maxEnd, end);
+    const card = mk('div','card');
+    card.innerHTML = `<div class="t">${a.animationName || a.id || a.constructor.name}</div><div class="s">${sel}</div>`;
+    const field = (label, key, val, type='number') => {
+      const row = mk('div','row'); row.innerHTML = `<label>${label}</label>`;
+      const inp = mk('input'); inp.type = type; inp.value = val;
+      inp.onclick = e => e.stopPropagation();
+      inp.onchange = () => {
+        const cur = edits.anims[sel] = edits.anims[sel] || {};
+        let v = inp.value;
+        if (key==='iterations') v = (v==='infinite'||v==='∞') ? 'infinite' : +v;
+        else if (type==='number') v = Math.round(+v*1000);
+        cur[key] = v; applyLive();
+      };
+      row.appendChild(inp); card.appendChild(row);
+    };
+    field('길이 (s)', 'duration', ((ed.duration ?? t.duration)/1000).toFixed(2));
+    field('지연 (s)', 'delay', ((ed.delay ?? t.delay)/1000).toFixed(2));
+    field('이징', 'easing', ed.easing ?? t.easing, 'text');
+    const it = ed.iterations ?? t.iterations;
+    field('반복', 'iterations', it===Infinity?'infinite':it, 'text');
+    card.onclick = () => selectEl(el);
+    p.appendChild(card);
+  }
+  if (g) maxEnd = Math.max(maxEnd, g.globalTimeline.duration()*1000 || 0);
+  if (maxEnd > 0 && maxEnd < 60000 && !$('#lenInp').dataset.touched) setLen(Math.ceil(maxEnd/500)*0.5);
+}
+
+// ---- element inspector ----
+const PROPS = [
+  ['color','color'],['background-color','color'],['opacity','text'],['font-size','text'],
+  ['font-family','text'],['font-weight','text'],['width','text'],['height','text'],
+  ['border-radius','text'],['transform','text'],['left','text'],['top','text']
+];
+function onPick(e){
+  if (!picking) return;
+  e.preventDefault(); e.stopPropagation();
+  e.target.classList.remove('hl');
+  selectEl(e.target); setPicking(false);
+}
+function selectEl(el){
+  if (selected) selected.classList.remove('hl');
+  selected = el; el.classList.add('hl');
+  setTimeout(() => el.classList.remove('hl'), 1200);
+  const sel = selectorFor(el), cs = win().getComputedStyle(el), p = $('#tab-el');
+  p.innerHTML = `<div class="sec"><h3>선택된 요소</h3><div class="s" style="word-break:break-all;color:var(--mute)">${sel}</div></div>`;
+  const leaf = el.children.length === 0 && el.textContent.trim();
+  if (leaf) {
+    const sec = mk('div','sec'); sec.innerHTML = '<h3>텍스트</h3>';
+    const ta = mk('input'); ta.style.width='100%'; ta.value = edits.texts[sel] ?? el.textContent;
+    ta.oninput = () => { el.textContent = ta.value; edits.texts[sel] = ta.value; };
+    sec.appendChild(ta); p.appendChild(sec);
+  }
+  const sec = mk('div','sec'); sec.innerHTML = '<h3>스타일</h3>'; p.appendChild(sec);
+  const st = edits.styles[sel] || {};
+  for (const [prop, kind] of PROPS) {
+    const row = mk('div','row'); row.innerHTML = `<label>${prop}</label><div class="pair"></div>`;
+    const pair = row.lastChild, val = st[prop] ?? cs.getPropertyValue(prop);
+    const txt = mk('input'); txt.value = val; if (st[prop]) txt.style.borderColor = 'var(--acc)';
+    const set = v => { (edits.styles[sel] = edits.styles[sel] || {})[prop] = v; txt.style.borderColor='var(--acc)'; applyLive(); };
+    if (kind === 'color') { const c = mk('input'); c.type='color'; c.value = rgbHex(val); c.oninput = () => { txt.value = c.value; set(c.value); }; pair.appendChild(c); }
+    txt.onchange = () => set(txt.value);
+    pair.appendChild(txt);
+    if (st[prop]) { const x = mk('button','x'); x.textContent='✕'; x.title='되돌리기'; x.onclick=()=>{ delete edits.styles[sel][prop]; applyLive(); selectEl(el); }; pair.appendChild(x); }
+    sec.appendChild(row);
+  }
+  tab('el');
+}
+function rgbHex(v){
+  const m = v.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/); if (!m) return toHex(v);
+  return '#' + m.slice(1,4).map(n => (+n).toString(16).padStart(2,'0')).join('');
+}
+
+// apply edits live without reload
+function applyLive(){
+  const d = doc(); let st = d.getElementById(MARK);
+  if (!st) { st = d.createElement('style'); st.id = MARK; d.body.appendChild(st); }
+  st.textContent = editsCSS();
+  if (!playing) requestAnimationFrame(() => seek(+$('#scrub').value));
+}
+
+// ---- playback ----
+function setLen(s){ $('#lenInp').value = s; $('#scrub').max = s*1000; }
+function seek(ms){
+  for (const a of animList()) { try { a.pause(); a.currentTime = ms; } catch {} }
+  const g = win() && win().gsap;
+  if (g) { g.globalTimeline.pause(); g.globalTimeline.time(ms/1000); }
+  $('#time').textContent = (ms/1000).toFixed(2) + 's';
+}
+function setPlaying(on){
+  playing = on; $('#playBtn').textContent = on ? '⏸' : '▶';
+  const ms = +$('#scrub').value;
+  if (on) {
+    for (const a of animList()) { try { a.currentTime = ms; a.playbackRate = rate; a.play(); } catch {} }
+    const g = win() && win().gsap; if (g) { g.globalTimeline.timeScale(rate); g.globalTimeline.play(); }
+    rafOffset = ms; rafStart = performance.now();
+  } else seek(ms);
+}
+function tick(){
+  if (playing && source) {
+    const len = +$('#scrub').max;
+    let t = rafOffset + (performance.now() - rafStart) * rate;
+    if (t > len) { t = 0; rafOffset = 0; rafStart = performance.now(); seek(0); setPlaying(true); }
+    $('#scrub').value = t; $('#time').textContent = (t/1000).toFixed(2) + 's';
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---- UI wiring ----
+function mk(t, c){ const e = document.createElement(t); if (c) e.className = c; return e; }
+function tab(name){
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === 'tab-' + name));
+}
+function setPicking(on){ picking = on; $('#pickBtn').classList.toggle('primary', on); }
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => tab(b.dataset.tab));
+$('#openBtn').onclick = () => $('#file').click();
+$('#file').onchange = e => readFile(e.target.files[0]);
+function readFile(f){ if (!f) return; f.text().then(t => load(t, f.name)); }
+const wrap = $('#wrap');
+['dragenter','dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); wrap.classList.add('dragging'); }));
+['dragleave','drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); wrap.classList.remove('dragging'); }));
+document.addEventListener('drop', e => readFile(e.dataTransfer.files[0]));
+document.addEventListener('paste', e => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  const t = e.clipboardData.getData('text'); if (/<\w+[\s>]/.test(t)) load(t, 'pasted.html');
+});
+$('#demoBtn').onclick = () => fetch('examples/demo.html').then(r => r.text()).then(t => load(t, 'demo.html'))
+  .catch(() => alert('examples/demo.html을 불러올 수 없습니다 (로컬 서버로 실행하세요).'));
+$('#pickBtn').onclick = () => setPicking(!picking);
+$('#playBtn').onclick = () => setPlaying(!playing);
+$('#restartBtn').onclick = () => { $('#scrub').value = 0; render(); setPlaying(true); };
+$('#scrub').oninput = () => { if (playing) setPlaying(false); seek(+$('#scrub').value); };
+$('#lenInp').onchange = () => { $('#lenInp').dataset.touched = 1; setLen(+$('#lenInp').value); };
+$('#rateSel').onchange = () => { rate = +$('#rateSel').value; if (playing) setPlaying(true); };
+$('#applyCode').onclick = () => { source = $('#code').value; render(); };
+$('#resetBtn').onclick = () => { if (confirm('모든 수정사항을 지울까요?')) { edits = blank(); render(); } };
+$('#bgChk').onchange = () => wrap.style.background = $('#bgChk').checked ? 'repeating-conic-gradient(#444 0 25%,#666 0 50%) 0 0/20px 20px' : '#000';
+$('#sizeSel').onchange = fitSize; window.addEventListener('resize', fitSize);
+function fitSize(){
+  const v = $('#sizeSel').value;
+  if (v === 'fill') { Object.assign(frame.style,{width:'100%',height:'100%',transform:'',transformOrigin:''}); Object.assign(wrap.style,{width:'100%',height:'100%'}); return; }
+  const [w,h] = v.split('x').map(Number), box = $('.preview').getBoundingClientRect();
+  const k = Math.min((box.width-32)/w, (box.height-32)/h);
+  Object.assign(wrap.style,{width:w*k+'px',height:h*k+'px'});
+  Object.assign(frame.style,{width:w+'px',height:h+'px',transform:`scale(${k})`,transformOrigin:'0 0'});
+}
+$('#exportBtn').onclick = () => {
+  if (!source) return alert('먼저 파일을 여세요.');
+  const blob = new Blob([build()], {type:'text/html'});
+  const a = mk('a'); a.href = URL.createObjectURL(blob);
+  a.download = fileName.replace(/(\.html?)?$/i, m => '-edited' + (m || '.html'));
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+document.addEventListener('keydown', e => {
+  if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+  if (e.key === 'Escape') setPlaying(false), setPicking(false);
+});
+})();
+</script>
+</body>
+</html>
