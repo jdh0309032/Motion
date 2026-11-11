@@ -1,0 +1,11 @@
+{
+  "name": "Motion Studio",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "postCreateCommand": "cd studio && npm install && npx playwright install --with-deps chromium",
+  "postAttachCommand": "cd studio && npm run dev -- --host",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": { "label": "Motion Studio", "onAutoForward": "openBrowser" }
+  },
+  "hostRequirements": { "cpus": 4, "memory": "8gb" }
+}
